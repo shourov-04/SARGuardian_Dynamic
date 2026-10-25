@@ -53,10 +53,6 @@ describe('validated Landslide session state', () => {
       coordinates: [['not', 'coordinates']],
       areaClosed: true,
       productType: 'SECRET',
-      processingOptions: {
-        product_type: 'GOFF', acquisition_window: 'both-acquisitions-in-window',
-        retention_mode: 'full-lossless', processing_profile: 'validation-pilot',
-      },
       catalogResult: { mode: 'not-a-catalogue' },
     })]]);
     vi.stubGlobal('window', { sessionStorage: {
@@ -68,10 +64,7 @@ describe('validated Landslide session state', () => {
     expect(restored.coordinates).toEqual([]);
     expect(restored.areaClosed).toBe(false);
     expect(restored.catalogResult).toBeNull();
-    expect(restored.processingOptions).toEqual({
-      product_type: 'BOTH', acquisition_window: 'secondary-acquisition-in-window',
-      retention_mode: 'derived-only', processing_profile: 'full-aoi',
-    });
+    expect(restored.processingOptions.processing_profile).toBe('full-aoi');
   });
 
   it('rejects invalid dates, out-of-range coordinates, and orphaned selections', () => {

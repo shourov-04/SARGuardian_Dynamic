@@ -48,7 +48,6 @@ def download_exact_product_with_timeout(
     connect_timeout_seconds: int = 30,
     read_timeout_seconds: int = 120,
     progress_interval_bytes: int = 128 * 1024 * 1024,
-    progress_interval_seconds: float = 30.0,
 ) -> int:
     """Stream one authenticated ASF object with bounded idle waits and progress logs."""
     if not trusted_asf_url(url):
@@ -78,11 +77,6 @@ def download_exact_product_with_timeout(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         downloaded = 0
         next_progress = progress_interval_bytes
-        last_progress_at = time.monotonic()
-        print(
-            f"DOWNLOAD_STREAM_STARTED expected_bytes={expected_bytes or header_bytes or 'unknown'}",
-            flush=True,
-        )
         try:
             with out_path.open("wb") as target:
                 for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
@@ -90,17 +84,12 @@ def download_exact_product_with_timeout(
                         continue
                     target.write(chunk)
                     downloaded += len(chunk)
-                    now = time.monotonic()
-                    if (
-                        downloaded >= next_progress
-                        or now - last_progress_at >= progress_interval_seconds
-                    ):
+                    if downloaded >= next_progress:
                         print(
                             f"DOWNLOAD_PROGRESS_BYTES={downloaded} "
                             f"EXPECTED_BYTES={expected_bytes or header_bytes or 'unknown'}",
                             flush=True,
                         )
-                        last_progress_at = now
                         while next_progress <= downloaded:
                             next_progress += progress_interval_bytes
         except requests.exceptions.RequestException:
@@ -205,7 +194,6 @@ def _sleep_before_retry(stage: str, attempt: int, detail: str) -> None:
         f"NETWORK_RETRY stage={stage} attempt={attempt} "
         f"sleep_seconds={delay} {safe_remote_error(RuntimeError(detail))}",
         file=sys.stderr,
-        flush=True,
     )
     time.sleep(delay)
 
@@ -545,19 +533,9 @@ def main() -> int:
         return 2
 
     try:
-        print(
-            f"PRODUCT_DISCOVERY_START family={args.product_type} maturity={args.maturity}",
-            flush=True,
-        )
         acquisition, acquisition_sha256 = load_source_acquisition(args.science_root, args.aoi)
         record, session, remote_content_length_bytes = probe_known_product(
             acquisition, wanted, args.product_type, args.maturity
-        )
-        print(
-            "PRODUCT_DISCOVERY_COMPLETE "
-            f"family={args.product_type} backend={record['_sarguardian_discovery_backend']} "
-            f"remote_bytes={remote_content_length_bytes or 'unknown'}",
-            flush=True,
         )
     except Exception as exc:
         print(f"ERROR=DIRECT_HTTPS_PRODUCT_PROBE_FAILED TYPE={type(exc).__name__}", file=sys.stderr)

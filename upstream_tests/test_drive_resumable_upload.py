@@ -143,10 +143,7 @@ def test_resumable_upload_recovers_acknowledged_offset_after_http_500(monkeypatc
     assert session.put_calls[1][1]["headers"]["Content-Range"] == "bytes */8"
     assert session.put_calls[2][1]["headers"]["Content-Range"] == "bytes 4-7/8"
     assert session.put_calls[2][1]["data"] == b"efgh"
-    captured = capsys.readouterr()
-    assert "DRIVE_RETRY stage=chunk_upload" in captured.err
-    assert "DRIVE_FILE_UPLOAD_START name=small-result.csv bytes=8" in captured.out
-    assert "DRIVE_FILE_UPLOAD_PROGRESS name=small-result.csv uploaded_bytes=8 total_bytes=8" in captured.out
+    assert "DRIVE_RETRY stage=chunk_upload" in capsys.readouterr().err
 
 
 def test_non_retryable_drive_http_400_fails_without_repeating(monkeypatch):
@@ -273,32 +270,3 @@ def test_identical_run_scoped_files_do_not_require_new_drive_bytes(tmp_path):
 
     assert missing == 0
     assert replacements == []
-
-
-def test_account_job_dashboard_upload_targets_the_job_id_folder():
-    names = drive_upload.drive_folder_names(
-        job_id="11111111-2222-3333-4444-555555555555",
-        run_name="SARGuardian-AOI-123-1",
-    )
-
-    assert names == ["11111111-2222-3333-4444-555555555555"]
-
-
-def test_account_job_product_upload_stays_below_the_same_job_id_folder():
-    names = drive_upload.drive_folder_names(
-        job_id="11111111-2222-3333-4444-555555555555",
-        product_type="GUNW",
-        maturity="PROVISIONAL",
-        granule_name="NISAR_L2_PR_GUNW_TEST.h5",
-        version_tag="123-1",
-    )
-
-    assert names == [
-        "11111111-2222-3333-4444-555555555555", "Products", "GUNW",
-        "PROVISIONAL", "NISAR_L2_PR_GUNW_TEST", "Runs", "123-1",
-    ]
-
-
-def test_job_folder_name_rejects_path_injection():
-    with pytest.raises(drive_upload.DriveError, match="JOB_ID_INVALID"):
-        drive_upload.drive_folder_names(job_id="../another-folder", run_name="run-1")

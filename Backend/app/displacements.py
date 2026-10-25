@@ -42,13 +42,6 @@ PROCESSING_OPTION_DEFAULTS = {
     "retention_mode": "derived-only", "processing_profile": "validation-pilot",
 }
 
-ACCOUNT_PROCESSING_OPTIONS = {
-    "product_type": "BOTH",
-    "acquisition_window": "secondary-acquisition-in-window",
-    "retention_mode": "derived-only",
-    "processing_profile": "full-aoi",
-}
-
 
 def request_fingerprint(record: dict[str, Any]) -> str:
     return processing_fingerprint(

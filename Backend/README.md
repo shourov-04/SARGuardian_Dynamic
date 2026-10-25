@@ -61,6 +61,7 @@ obtaining staging values. The current code expects these names:
 - `CORS_ORIGINS` (comma-separated origins; required in production)
 - `PREFLIGHT_TTL_SECONDS` (60 through 604800 seconds)
 - `DISPLACEMENT_ACTIONS_ENABLED`, `GITHUB_ACTIONS_TOKEN`, `GITHUB_ACTIONS_REPOSITORY`, `GITHUB_ACTIONS_WORKFLOW`, `GITHUB_ACTIONS_REF`, `DISPLACEMENT_CALLBACK_SECRET`, and `PUBLIC_API_URL` for durable scientific-processing dispatch
+- `DISPLACEMENT_WORKFLOW_MODE` (`callback` by default, or `external` to run an unchanged workflow from another GitHub account and read its dashboard artifact back; no callback secret or public URL is needed — see [`../docs/EXTERNAL_WORKFLOW_MODE.md`](../docs/EXTERNAL_WORKFLOW_MODE.md))
 - Runner-only GitHub secrets: `EARTHDATA_USERNAME`, `EARTHDATA_PASSWORD` or `EARTHDATA_TOKEN`, `GOOGLE_DRIVE_OAUTH_CLIENT_JSON`, `GOOGLE_DRIVE_REFRESH_TOKEN`, and `GOOGLE_DRIVE_FOLDER_ID`
 - `PORT` (optional; defaults to 8000)
 

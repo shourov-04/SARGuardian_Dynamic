@@ -124,9 +124,13 @@ export function loadLandslideSessionState(uid: string): LandslideSessionState {
     const selectedHarmonyProduct = parsed.selectedHarmonyProduct === null || parsed.selectedHarmonyProduct === undefined
       ? null
       : isCatalogProduct(parsed.selectedHarmonyProduct) ? parsed.selectedHarmonyProduct : null;
-    // Account displacement processing has one production contract. Ignore
-    // stale per-browser choices saved by older builds.
-    const processingOptions: DisplacementProcessingOptions = { ...DEFAULT_DISPLACEMENT_OPTIONS };
+    const storedOptions = isRecord(parsed.processingOptions) ? parsed.processingOptions : {};
+    const processingOptions: DisplacementProcessingOptions = {
+      product_type: storedOptions.product_type === 'GUNW' || storedOptions.product_type === 'GOFF' ? storedOptions.product_type : 'BOTH',
+      acquisition_window: storedOptions.acquisition_window === 'both-acquisitions-in-window' ? storedOptions.acquisition_window : 'secondary-acquisition-in-window',
+      retention_mode: storedOptions.retention_mode === 'full-lossless' ? storedOptions.retention_mode : 'derived-only',
+      processing_profile: 'full-aoi',
+    };
 
     return {
       searchText: typeof parsed.searchText === 'string' ? parsed.searchText : fallback.searchText,

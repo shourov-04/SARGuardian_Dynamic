@@ -36,13 +36,11 @@ Those workflows and their processing tools are the integration source used here.
 - Signed callbacks bind the upstream workflow run to the durable account job,
   persist discovered GUNW/GOFF counts, and accept success only when the upstream
   dashboard and private-Drive receipt form a complete version-2 result contract.
-- Account jobs use one fixed production contract: both GUNW and GOFF families,
-  secondary-acquisition-in-window date matching, upstream `full-aoi-baseline`,
-  and derived-only retention. This includes boundary pairs whose secondary
-  acquisition is inside the requested window while the reference is earlier,
-  and selects every supported product in the resulting AOI/date baseline. The
-  configurable pilot profile remains available only when the reusable upstream
-  workflow is run directly for engineering validation.
+- Existing `product_type` (`BOTH`, `GUNW`, `GOFF`) is applied during catalog
+  discovery. Account jobs always use upstream `full-aoi-baseline`, so every
+  eligible product in the requested AOI/date baseline is selected. The pilot
+  profile remains available only when the reusable upstream workflow is run
+  directly for engineering validation.
 - ASF catalog calls are bounded to two 30-second attempts. Username/password
   authentication exchanges credentials for an EDL bearer token with a
   20-second timeout and skips the unrelated `asf-urs` cookie flow, which can
@@ -52,7 +50,5 @@ Those workflows and their processing tools are the integration source used here.
   scheduled for the product-level retry pass.
 - Either `GOOGLE_DRIVE_PARENT_FOLDER_ID` (upstream name) or the existing
   `GOOGLE_DRIVE_FOLDER_ID` secret can provide the private retention root.
-- Account processing creates `<private-retention-root>/<job-id>` and keeps the final
-  bundle plus every per-product retained result inside that job-scoped tree.
 
 Frontend source is intentionally outside this integration and remains unchanged.

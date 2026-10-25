@@ -15,8 +15,6 @@ UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 TOKEN = "https://oauth2.googleapis.com/token"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 CHUNK_BYTES = 8 * 1024 * 1024  # 8 MiB; multiple of 256 KiB.
-UPLOAD_PROGRESS_BYTES = 64 * 1024 * 1024
-UPLOAD_PROGRESS_SECONDS = 30.0
 MAX_RETRY_ATTEMPTS = 5
 RETRYABLE_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 RETRY_BASE_SECONDS = 2
@@ -290,7 +288,6 @@ class Drive:
         raise DriveError("DRIVE_RESUMABLE_STATUS_RETRIES_EXHAUSTED")
 
     def upload_resumable(self, parent, path: Path, mime, md5, sha, size):
-        print(f"DRIVE_FILE_UPLOAD_START name={path.name} bytes={size}", flush=True)
         existing = self.list_named_children(parent, path.name)
         files = [x for x in existing if x.get('mimeType') != FOLDER_MIME]
         if len(files) > 1:
@@ -338,8 +335,6 @@ class Drive:
 
         offset = 0
         info = None
-        last_reported_offset = 0
-        last_progress_at = time.monotonic()
         with path.open('rb') as f:
             while offset < size and info is None:
                 f.seek(offset)
@@ -441,19 +436,6 @@ class Drive:
                     part.close()
                     raise DriveError(f'DRIVE_CHUNK_UPLOAD_HTTP_{status}')
 
-                now = time.monotonic()
-                if offset > last_reported_offset and (
-                    offset == size
-                    or offset - last_reported_offset >= UPLOAD_PROGRESS_BYTES
-                    or now - last_progress_at >= UPLOAD_PROGRESS_SECONDS
-                ):
-                    print(
-                        f"DRIVE_FILE_UPLOAD_PROGRESS name={path.name} "
-                        f"uploaded_bytes={offset} total_bytes={size}",
-                        flush=True,
-                    )
-                    last_reported_offset = offset
-                    last_progress_at = now
                 if info is not None:
                     break
 
@@ -552,20 +534,6 @@ def granule_folder_names(product_type, maturity, granule_name, version_tag=None)
     return names
 
 
-def drive_folder_names(*, job_id=None, run_name=None, product_type=None, maturity=None,
-                       granule_name=None, version_tag=None):
-    """Build the remote path, keeping every account-job result below parent/<job-id>."""
-    job_scope = str(job_id or "").strip()
-    if job_scope and not __import__("re").fullmatch(r"[A-Za-z0-9_.-]{1,100}", job_scope):
-        raise DriveError("JOB_ID_INVALID")
-    if run_name:
-        return [job_scope] if job_scope else ["SARGuardian-DataArchive", "Runs", run_name]
-    granule_names = granule_folder_names(product_type, maturity, granule_name, version_tag)
-    if job_scope:
-        return [job_scope, "Products", *granule_names[1:]]
-    return granule_names
-
-
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', required=True, type=Path, help='folder containing curated archive/sidecars; raw product is excluded')
@@ -573,7 +541,6 @@ def main():
     p.add_argument('--maturity', choices=['PROVISIONAL', 'BETA'])
     p.add_argument('--granule-name')
     p.add_argument('--run-name', help='upload an aggregate run bundle under SARGuardian-DataArchive/Runs/<run-name>')
-    p.add_argument('--job-id', help='store every result below the configured parent folder/<job-id>')
     p.add_argument('--version-tag', help='isolate a granule upload under <granule>/Runs/<version-tag>; never overwrites prior runs')
     p.add_argument(
         '--existing-files-are-new', action='store_true',
@@ -586,8 +553,6 @@ def main():
     p.add_argument('--files', nargs='+', required=True, help='explicit local files to upload; raw source must NOT be included')
     p.add_argument('--out', required=True, type=Path)
     args = p.parse_args()
-    if args.job_id and not __import__('re').fullmatch(r'[A-Za-z0-9_.-]{1,100}', args.job_id):
-        raise DriveError('JOB_ID_INVALID')
     if args.run_name:
         if args.version_tag:
             raise DriveError('RUN_UPLOAD_CANNOT_MIX_RUN_NAME_AND_VERSION_TAG')
@@ -621,12 +586,11 @@ def main():
     limit, usage = drive.quota()
     parent = required_env('GOOGLE_DRIVE_PARENT_FOLDER_ID')
     if args.run_name:
-        folder_names = drive_folder_names(job_id=args.job_id, run_name=args.run_name)
+        folder_names = ['SARGuardian-DataArchive', 'Runs', args.run_name]
         granule_folder = None
     else:
-        folder_names = drive_folder_names(
-            job_id=args.job_id, product_type=args.product_type, maturity=args.maturity,
-            granule_name=args.granule_name, version_tag=args.version_tag,
+        folder_names = granule_folder_names(
+            args.product_type, args.maturity, args.granule_name, args.version_tag
         )
         granule_folder = Path(args.granule_name.strip()).name
         if granule_folder.lower().endswith('.h5'): granule_folder = granule_folder[:-3]
@@ -678,17 +642,13 @@ def main():
         )
     receipt = {'schema_version':'sarguardian-drive-retention-receipt/1.0','created_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'upload_kind':'run_bundle' if args.run_name else 'single_granule',
-        'job_id':str(args.job_id or '').strip() or None,
         'run_name':args.run_name, 'product_type':args.product_type, 'maturity':args.maturity, 'version_tag':args.version_tag,
         'granule_name':granule_folder, 'remote_folder_id':folder,'files':outputs,
         'uploaded_curated_bytes':sum(x['bytes'] for x in outputs),
         'raw_product_uploaded':False,'remote_verification':'PASS','raw_source_deleted':False}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(receipt, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
-    print(
-        f"DRIVE_VERIFICATION=PASS FILE_COUNT={len(outputs)} RECEIPT={args.out}",
-        flush=True,
-    )
+    print(f"DRIVE_VERIFICATION=PASS FILE_COUNT={len(outputs)} REMOTE_FOLDER_ID={folder} RECEIPT={args.out}")
     return 0
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -18,6 +19,12 @@ DEFAULT_PREFLIGHT_TTL_SECONDS = 86_400
 DEFAULT_PORT = 8_000
 DEFAULT_GITHUB_API_URL = "https://api.github.com"
 DEFAULT_DISPLACEMENT_DISPATCH_TIMEOUT_SECONDS = 3_600
+# "callback": dispatch the account workflow in this repository and accept its signed callbacks.
+# "external": dispatch an unchanged workflow (possibly in another GitHub account), poll its run
+# through the GitHub API and read its published dashboard artifact; no callback is involved.
+DEFAULT_DISPLACEMENT_WORKFLOW_MODE = "callback"
+DISPLACEMENT_WORKFLOW_MODES = ("callback", "external")
+_REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 
 
 class SettingsError(ValueError):
@@ -48,6 +55,7 @@ class RuntimeSettings:
     github_api_url: str
     displacement_dispatch_timeout_seconds: int
     port: int
+    displacement_workflow_mode: str = DEFAULT_DISPLACEMENT_WORKFLOW_MODE
 
 
 def _bounded_int(values: Mapping[str, str], name: str, default: int, minimum: int, maximum: int) -> int:
@@ -68,6 +76,13 @@ def _flag(values: Mapping[str, str], name: str, default: bool) -> bool:
     if raw in {"0", "false", "no"}:
         return False
     raise SettingsError(f"{name} is invalid.")
+
+
+def _workflow_mode(values: Mapping[str, str]) -> str:
+    mode = values.get("DISPLACEMENT_WORKFLOW_MODE", DEFAULT_DISPLACEMENT_WORKFLOW_MODE).strip().lower() or DEFAULT_DISPLACEMENT_WORKFLOW_MODE
+    if mode not in DISPLACEMENT_WORKFLOW_MODES:
+        raise SettingsError("DISPLACEMENT_WORKFLOW_MODE is invalid.")
+    return mode
 
 
 def get_settings(environ: Mapping[str, str] | None = None) -> RuntimeSettings:
@@ -95,6 +110,7 @@ def get_settings(environ: Mapping[str, str] | None = None) -> RuntimeSettings:
         github_api_url=values.get("GITHUB_API_URL", DEFAULT_GITHUB_API_URL).rstrip("/"),
         displacement_dispatch_timeout_seconds=_bounded_int(values, "DISPLACEMENT_DISPATCH_TIMEOUT_SECONDS", DEFAULT_DISPLACEMENT_DISPATCH_TIMEOUT_SECONDS, 300, 86_400),
         port=_bounded_int(values, "PORT", DEFAULT_PORT, 1, 65_535),
+        displacement_workflow_mode=_workflow_mode(values),
     )
 
 
@@ -112,19 +128,29 @@ def validate_production_settings(settings: RuntimeSettings | None = None) -> Run
     if not current.supabase_service_role_key:
         raise SettingsError("SUPABASE_SERVICE_ROLE_KEY must be configured in production.")
     if current.displacement_actions_enabled:
-        missing = [name for name, value in {
+        external = current.displacement_workflow_mode == "external"
+        required = {
             "GITHUB_ACTIONS_TOKEN": current.github_actions_token,
             "GITHUB_ACTIONS_REPOSITORY": current.github_actions_repository,
             "GITHUB_ACTIONS_WORKFLOW": current.github_actions_workflow,
             "GITHUB_ACTIONS_REF": current.github_actions_ref,
-            "DISPLACEMENT_CALLBACK_SECRET": current.displacement_callback_secret,
-            "PUBLIC_API_URL": current.public_api_url,
-        }.items() if not value]
+        }
+        if not external:
+            # The external mode polls GitHub; it has no worker callback to authenticate.
+            required |= {
+                "DISPLACEMENT_CALLBACK_SECRET": current.displacement_callback_secret,
+                "PUBLIC_API_URL": current.public_api_url,
+            }
+        missing = [name for name, value in required.items() if not value]
         if missing:
             raise SettingsError(f"Displacement Actions is enabled but missing: {', '.join(missing)}.")
-        callback_url = urlsplit(current.public_api_url)
-        if callback_url.scheme != "https" or not callback_url.netloc:
-            raise SettingsError("PUBLIC_API_URL must be an HTTPS URL when Displacement Actions is enabled.")
+        if external:
+            if not _REPOSITORY_PATTERN.fullmatch(current.github_actions_repository):
+                raise SettingsError("GITHUB_ACTIONS_REPOSITORY must look like owner/repository.")
+        else:
+            callback_url = urlsplit(current.public_api_url)
+            if callback_url.scheme != "https" or not callback_url.netloc:
+                raise SettingsError("PUBLIC_API_URL must be an HTTPS URL when Displacement Actions is enabled.")
     return current
 
 
