@@ -5,7 +5,6 @@ import { ScientificResults } from '../ui/ScientificResults';
 import { countCatalogGranules, ELAPSED_TICK_MS, formatElapsed } from '../ui/processingStatus';
 import { prepareInvestigation } from '../engine/investigation';
 import { isLandslideDisplacementRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath } from '../../src/routing';
-import { DEFAULT_DISPLACEMENT_OPTIONS } from '../../src/api/catalog';
 
 describe('displacement preparation route', () => {
   const user = { getIdToken: vi.fn() } as never;
@@ -44,10 +43,6 @@ describe('displacement preparation route', () => {
   it('keeps a one-second age tick and renders failed recovery actions with granule counts', () => {
     expect(ELAPSED_TICK_MS).toBe(1000);
     expect(JOB_STATUS_POLL_MS).toBe(2000);
-    expect(DEFAULT_DISPLACEMENT_OPTIONS).toEqual({
-      product_type: 'BOTH', acquisition_window: 'secondary-acquisition-in-window',
-      retention_mode: 'derived-only', processing_profile: 'full-aoi',
-    });
     expect(formatElapsed('2026-10-24T10:00:00Z', '2026-10-24T10:00:02Z', 'running', Date.parse('2026-10-24T10:00:03Z'))).toBe('0m 3s');
     expect(countCatalogGranules([
       { product_type: 'GUNW' }, { product_type: 'GOFF' }, { product_type: 'GUNW' },
@@ -57,7 +52,7 @@ describe('displacement preparation route', () => {
       start_date: '2026-09-27', end_date: '2026-10-24', created_at: '2026-10-24T10:00:00Z', updated_at: '2026-10-24T10:01:05Z',
       error_message: 'Worker failed.',
     } as const;
-    const html = renderToStaticMarkup(<DisplacementJobStatus job={failedJob} pendingAction={null} clock={Date.parse('2026-10-24T10:02:00Z')}
+    const html = renderToStaticMarkup(<DisplacementJobStatus job={failedJob} busy={false} clock={Date.parse('2026-10-24T10:02:00Z')}
       granuleCounts={{ GUNW: 4, GOFF: 3, source: 'catalog-preflight' }} onCancel={() => {}} onRefresh={() => {}}
       onRetry={() => {}} onBack={() => {}} />);
     expect(html).toContain('Age:');
@@ -70,26 +65,15 @@ describe('displacement preparation route', () => {
     expect(html).toContain('Go to map');
     expect(html).not.toContain('Start displacement processing');
 
-    const runningWithWorkerCounts = { ...failedJob, state: 'running', stage: 'products_discovered',
-      github_run_url: 'https://github.com/shourov-04/SARGuardian_Dynamic/actions/runs/123', result_summary: {
+    const runningWithWorkerCounts = { ...failedJob, state: 'running', stage: 'products_discovered', result_summary: {
       catalog_granule_counts: { GUNW: 8, GOFF: 5 }, selected_granule_counts: { GUNW: 1, GOFF: 1 },
     } } as const;
-    const runningHtml = renderToStaticMarkup(<DisplacementJobStatus job={runningWithWorkerCounts as never} pendingAction={null}
+    const runningHtml = renderToStaticMarkup(<DisplacementJobStatus job={runningWithWorkerCounts as never} busy={false}
       clock={Date.parse('2026-10-24T10:02:00Z')} granuleCounts={null} onCancel={() => {}} onRefresh={() => {}}
       onRetry={() => {}} onBack={() => {}} />);
     expect(runningHtml).toContain('>8<');
     expect(runningHtml).toContain('>5<');
     expect(runningHtml).toContain('Worker discovery');
-    expect(runningHtml).toContain('Refresh task');
-    expect(runningHtml).not.toContain('View worker logs');
-    expect(runningHtml).not.toContain('https://github.com/shourov-04/SARGuardian_Dynamic/actions/runs/123');
-
-    const refreshingHtml = renderToStaticMarkup(<DisplacementJobStatus job={runningWithWorkerCounts as never} pendingAction="refresh"
-      clock={Date.parse('2026-10-24T10:02:00Z')} granuleCounts={null} onCancel={() => {}} onRefresh={() => {}}
-      onRetry={() => {}} onBack={() => {}} />);
-    expect(refreshingHtml).toContain('Refreshing…');
-    expect(refreshingHtml).toContain('Cancel task');
-    expect(refreshingHtml).not.toContain('Cancelling…');
   });
 
   it('shows only one Drive-folder download action after successful processing', () => {
@@ -113,5 +97,45 @@ describe('displacement preparation route', () => {
     expect(html).not.toContain('Scientific diagnostics');
     expect(html).not.toContain('Input products');
     expect(html).not.toContain('Retained scientific outputs');
+  });
+
+  it('offers the GitHub result package for output produced by the unchanged upstream workflow', () => {
+    const githubJob = {
+      id: 'github-job', state: 'succeeded', stage: 'completed',
+      aoi_wkt: 'POLYGON((85 27, 85.01 27, 85 27.01, 85 27))', start_date: '2026-09-27', end_date: '2026-10-24',
+      created_at: '2026-10-24T10:00:00Z', updated_at: '2026-10-24T10:10:00Z',
+      github_run_url: 'https://github.com/owner/repo/actions/runs/42',
+      result_summary: {
+        source: 'github_artifact', scientific_status: 'PASS',
+        github_artifact: { name: 'sarguardian-aoi-dashboard-42-1', size_in_bytes: 5_242_880, expires_at: '2026-11-30T00:00:00Z' },
+        products: [
+          { id: 'GUNW-001', product_type: 'GUNW', status: 'PASS', reference_date: '2026-09-01', secondary_date: '2026-09-13', valid_pixels: 321 },
+          { id: 'GOFF-002', product_type: 'GOFF', status: 'WARNING', reference_date: '2026-09-01', secondary_date: '2026-09-13' },
+        ],
+      },
+    } as const;
+
+    const html = renderToStaticMarkup(<ScientificResults job={githubJob as never} user={user} />);
+
+    expect(html).toContain('Download results (ZIP)');
+    expect(html).toContain('sarguardian-aoi-dashboard-42-1.zip');
+    expect(html).toContain('5.0 MB');
+    expect(html).toContain('Processing checks passed');
+    expect(html).toContain('2 products processed');
+    expect(html).toContain('GUNW-001');
+    expect(html).toContain('GOFF-002');
+    expect(html).not.toContain('drive.google.com');
+
+    const status = renderToStaticMarkup(<DisplacementJobStatus job={githubJob as never} busy={false} clock={Date.parse('2026-10-24T10:12:00Z')}
+      granuleCounts={null} user={user} onCancel={() => {}} onRefresh={() => {}} onRetry={() => {}} onBack={() => {}} />);
+    expect(status).toContain('https://github.com/owner/repo/actions/runs/42');
+    expect(status).toContain('GUNW granules');
+    expect(status).toContain('Download results (ZIP)');
+  });
+
+  it('shows nothing for a succeeded job that has neither a Drive folder nor a GitHub package', () => {
+    const bare = { id: 'bare', state: 'succeeded', stage: 'completed', aoi_wkt: 'x', start_date: 'a', end_date: 'b',
+      created_at: '2026-10-24T10:00:00Z', updated_at: '2026-10-24T10:10:00Z', result_summary: { products: [] } } as const;
+    expect(renderToStaticMarkup(<ScientificResults job={bare as never} />)).toBe('');
   });
 });

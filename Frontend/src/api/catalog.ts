@@ -250,6 +250,36 @@ export async function downloadDisplacementArtifact(
   return response.blob();
 }
 
+export type DisplacementResultLink = { url: string; filename: string; expires_in_seconds: number };
+
+/**
+ * Ask the API for a short-lived signed link to the whole result ZIP of a job whose output
+ * was produced by the upstream GitHub workflow. The browser then downloads it directly from
+ * GitHub, so the (possibly very large) file never passes through the API.
+ */
+export async function getDisplacementResultLink(
+  jobId: string,
+  user: Pick<User, 'getIdToken'> | null,
+): Promise<DisplacementResultLink> {
+  const safeId = jobId.trim();
+  if (!safeId) throw new Error('A displacement job ID is required.');
+  const link = await readAuthenticatedPayload<DisplacementResultLink>(
+    `${API_BASE}/api/displacement-jobs/${encodeURIComponent(safeId)}/result-link`,
+    user,
+    'Could not prepare the result download.',
+  );
+  let target: URL;
+  try {
+    target = new URL(link.url);
+  } catch {
+    throw new Error('The result download link is invalid.');
+  }
+  if (target.protocol !== 'https:' || target.username || target.password) {
+    throw new Error('The result download link is not secure.');
+  }
+  return link;
+}
+
 export async function getDisplacementJob(jobId: string, user: Pick<User, 'getIdToken'> | null): Promise<DisplacementJob> {
   const safeId = jobId.trim();
   if (!safeId) throw new Error('A displacement job ID is required.');
@@ -257,7 +287,6 @@ export async function getDisplacementJob(jobId: string, user: Pick<User, 'getIdT
     `${API_BASE}/api/displacement-jobs/${encodeURIComponent(safeId)}`,
     user,
     'Could not refresh the displacement job.',
-    { cache: 'no-store' },
   );
 }
 
@@ -266,7 +295,6 @@ export async function listDisplacementJobs(user: Pick<User, 'getIdToken'> | null
     `${API_BASE}/api/displacement-jobs`,
     user,
     'Could not load your displacement jobs.',
-    { cache: 'no-store' },
   );
 }
 

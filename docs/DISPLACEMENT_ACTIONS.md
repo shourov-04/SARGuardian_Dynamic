@@ -31,17 +31,15 @@ The account-facing workflow calls the vendored dynamic-AOI streaming pipeline fr
 `moshiour0/SARGuardian-backend`. It pins `moshiour0/SARGuardian` at
 `10639a916c9829850775410b3ed7de62e527770d`, uses the submitted WKT polygon unchanged,
 queries ASF separately by family and BETA/PROVISIONAL maturity, and retains
-catalog/identity evidence. Account jobs use both product families, select pairs by an
-in-window **secondary acquisition** date, process the complete eligible AOI baseline,
-and retain validated derived outputs. Products run sequentially, with one raw download
-per execution and at most one receipt-gated product retry.
+catalog/identity evidence. The default policy selects pairs by an in-window **secondary
+acquisition** date; an optional strict mode requires both dates in the window. Products
+run sequentially, with one raw download per execution and at most one receipt-gated
+product retry.
 
 Each product is validated against the requested AOI, processed by the original pinned
 GUNW/GOFF reader, uploaded to private Drive, and remotely verified before local raw data
-can be deleted. The configured Drive parent contains one folder named with the durable
-job ID; its `Products` subtree contains every per-granule result, while the job-folder root
-contains the derived-results ZIP, run summary, product table, and upload receipt. The API
-verifies Firebase ownership and streams a requested artifact only
+can be deleted. The dashboard job then retains the derived-results ZIP, run summary and
+product table. The API verifies Firebase ownership and streams a requested artifact only
 after rechecking its retained SHA-256 and byte count. No public Drive permission is
 created. `derived-only` never retains raw NISAR HDF5; `full-lossless` retains the
 lossless curated archive. Missing Drive credentials or any failed remote verification

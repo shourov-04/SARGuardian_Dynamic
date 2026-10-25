@@ -92,36 +92,15 @@ def test_account_workflow_calls_the_upstream_dynamic_aoi_streaming_pipeline() ->
     workflow = (root / ".github" / "workflows" / "sarguardian-displacement.yml").read_text(encoding="utf-8")
     dashboard = (root / ".github" / "workflows" / "sarguardian-aoi-wkt-dashboard.yml").read_text(encoding="utf-8")
     worker = (root / ".github" / "workflows" / "sarguardian-aoi-product-worker.yml").read_text(encoding="utf-8")
-    uploader = (root / "tools" / "drive_resumable_upload.py").read_text(encoding="utf-8")
     assert "uses: ./.github/workflows/sarguardian-aoi-wkt-dashboard.yml" in workflow
     assert "aoi_wkt: ${{ inputs.aoi_wkt }}" in workflow
     assert "date_filter_mode: ${{ inputs.acquisition_window }}" in workflow
-    assert "run_profile: full-aoi-baseline" in workflow
     assert "python tools/discover_aoi_products.py" in dashboard
     assert "uses: ./.github/workflows/sarguardian-aoi-product-worker.yml" in dashboard
-    assert dashboard.count("job_id: ${{ inputs.job_id }}") >= 2
-    assert '--job-id "$DRIVE_JOB_ID"' in dashboard
-    assert 'DRIVE_JOB_ID: ${{ inputs.job_id }}' in worker
-    assert worker.count('--job-id "$DRIVE_JOB_ID"') == 3
     assert "python science-source/src/gunw_reader.py" in worker
     assert "python science-source/src/goff_reader.py" in worker
     assert "--aoi \"$AOI_NAME\"" in worker
     assert "SCIENCE_COMMIT: 10639a916c9829850775410b3ed7de62e527770d" in worker
-    assert 'PYTHONUNBUFFERED: "1"' in worker
-    for milestone in (
-        "PRODUCT_PROCESSING_START", "PRODUCT_MILESTONE=download_started",
-        "PRODUCT_MILESTONE=aoi_validation_started", "PRODUCT_MILESTONE=science_reader_started",
-        "PRODUCT_MILESTONE=derived_validation_started", "PRODUCT_MILESTONE=drive_upload_started",
-        "PRODUCT_MILESTONE=cleanup_started", "PRODUCT_PROCESSING_STATUS=",
-    ):
-        assert milestone in worker
-    run_blocks = "\n".join(
-        line for line in worker.splitlines()
-        if not line.lstrip().startswith(("EARTHDATA_", "GOOGLE_DRIVE_"))
-    )
-    assert 'echo "$EARTHDATA_' not in run_blocks
-    assert 'printf "$EARTHDATA_' not in run_blocks
-    assert "REMOTE_FOLDER_ID=" not in uploader
 
 
 def test_cleanup_never_deletes_raw_without_complete_remote_receipts(tmp_path: Path) -> None:

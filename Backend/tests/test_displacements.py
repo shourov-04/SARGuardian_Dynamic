@@ -135,15 +135,11 @@ def test_resubmit_does_not_create_a_replacement_until_github_allocates_the_old_r
     assert store.row and store.row["state"] == "dispatching"
 
 
-def test_failed_job_retry_uses_stored_aoi_dates_and_current_fixed_options(monkeypatch) -> None:
+def test_failed_job_can_be_retried_from_its_immutable_stored_request(monkeypatch) -> None:
     store = DisplacementStore()
     api = client(monkeypatch, store)
     first = api.post("/api/displacement-jobs", json=payload()).json()
-    store.update_displacement_job(UUID(first["id"]), {
-        "state": "failed", "stage": "science_failed", "product_type": "GOFF",
-        "acquisition_window": "both-acquisitions-in-window", "retention_mode": "full-lossless",
-        "processing_profile": "validation-pilot",
-    })
+    store.update_displacement_job(UUID(first["id"]), {"state": "failed", "stage": "science_failed"})
 
     replacement = api.post(f"/api/displacement-jobs/{first['id']}/resubmit", json={"idempotency_key": "displacement-retry-001", "confirm": True})
 
@@ -151,22 +147,7 @@ def test_failed_job_retry_uses_stored_aoi_dates_and_current_fixed_options(monkey
     assert replacement.json()["id"] != first["id"]
     assert replacement.json()["state"] == "dispatching"
     assert replacement.json()["aoi_wkt"] == payload()["aoi_wkt"]
-    assert {key: replacement.json()[key] for key in (
-        "product_type", "acquisition_window", "retention_mode", "processing_profile",
-    )} == {
-        "product_type": "BOTH", "acquisition_window": "secondary-acquisition-in-window",
-        "retention_mode": "derived-only", "processing_profile": "full-aoi",
-    }
     assert len(store.rows) == 2
-
-
-def test_account_displacement_options_are_fixed_server_side(monkeypatch) -> None:
-    response = client(monkeypatch, DisplacementStore()).post("/api/displacement-jobs", json=payload() | {
-        "acquisition_window": "both-acquisitions-in-window",
-    })
-
-    assert response.status_code == 422
-    assert response.json()["detail"] == "Account displacement processing uses the fixed production processing contract."
 
 
 def test_account_owner_can_cancel_an_active_job_without_creating_a_replacement(monkeypatch) -> None:

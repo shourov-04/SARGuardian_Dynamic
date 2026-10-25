@@ -76,3 +76,61 @@ export function safeLegacyArtifactUrl(value: unknown): string | undefined {
     return url.protocol === 'https:' && !url.username && !url.password ? url.href : undefined;
   } catch { return undefined; }
 }
+
+export function safeHttpsUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : undefined;
+  } catch { return undefined; }
+}
+
+export type GithubResultPackage = {
+  name: string;
+  sizeBytes?: number;
+  expiresAt?: string;
+};
+
+/** The result ZIP kept on GitHub for a job run by the unchanged upstream workflow. */
+export function readGithubResultPackage(summary: unknown): GithubResultPackage | undefined {
+  const record = asRecord(summary);
+  if (record.source !== 'github_artifact') return undefined;
+  const artifact = asRecord(record.github_artifact);
+  const name = textValue(artifact.name);
+  if (!/^[A-Za-z0-9._-]{1,200}$/.test(name)) return undefined;
+  return { name, sizeBytes: numericValue(artifact.size_in_bytes), expiresAt: textValue(artifact.expires_at) || undefined };
+}
+
+export type ResultProduct = {
+  id: string;
+  productType: string;
+  status: string;
+  referenceDate: string;
+  secondaryDate: string;
+  validPixels?: number;
+  error: string;
+};
+
+export function readResultProducts(summary: unknown): ResultProduct[] {
+  const products = asRecord(summary).products;
+  if (!Array.isArray(products)) return [];
+  return products.flatMap((raw) => {
+    const product = asRecord(raw);
+    const id = textValue(product.id) || textValue(product.granule_name);
+    if (!id) return [];
+    return [{
+      id, productType: textValue(product.product_type), status: textValue(product.status) || 'UNKNOWN',
+      referenceDate: textValue(product.reference_date), secondaryDate: textValue(product.secondary_date),
+      validPixels: numericValue(product.valid_pixels), error: textValue(product.error),
+    }];
+  });
+}
+
+export function formatBytes(value: number | undefined): string {
+  if (value === undefined || value < 0) return 'unknown size';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+  return `${unit === 0 ? size : size.toFixed(size >= 100 ? 0 : 1)} ${units[unit]}`;
+}

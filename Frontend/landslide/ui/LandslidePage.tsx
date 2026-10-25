@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import type { User } from 'firebase/auth';
-import { analyzeGunwAoiQuality, createDisplacementJob, createQueuedJob, DEFAULT_DISPLACEMENT_OPTIONS, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
-import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
+import { analyzeGunwAoiQuality, createDisplacementJob, createQueuedJob, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
+import type { AoiWindowResponse, CatalogProduct, CatalogResponse, DisplacementProcessingOptions, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
 import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validatePolyline } from '../engine/validation';
 import { prepareInvestigation } from '../engine/investigation';
 import { DisplacementPreparation } from './DisplacementPreparation';
@@ -1035,7 +1035,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   const [profileImageFailed, setProfileImageFailed] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [productType, setProductType] = useState<NisarProductType>(() => initialSessionState.catalogResult?.query.product_type ?? 'GUNW');
-  const processingOptions = DEFAULT_DISPLACEMENT_OPTIONS;
+  const [processingOptions, setProcessingOptions] = useState<DisplacementProcessingOptions>(initialSessionState.processingOptions);
   const [catalogResult, setCatalogResult] = useState<CatalogResponse | null>(initialSessionState.catalogResult);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [isDisplacementSubmitting, setIsDisplacementSubmitting] = useState(false);
@@ -2195,6 +2195,18 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                   <article className="investigation-mode-card displacement-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="locate" /></span>
                     <h3>Find Displacements</h3>
+                    <details className="processing-options"><summary>Processing options</summary>
+                      <label>Product families<select aria-label="Processing product families" value={processingOptions.product_type} onChange={(event) => setProcessingOptions((current) => ({ ...current, product_type: event.target.value as NisarProductType }))}>
+                        <option value="BOTH">GUNW and GOFF</option><option value="GUNW">GUNW</option><option value="GOFF">GOFF</option>
+                      </select></label>
+                      <label>Acquisition dates<select aria-label="Acquisition date selection" value={processingOptions.acquisition_window} onChange={(event) => setProcessingOptions((current) => ({ ...current, acquisition_window: event.target.value as DisplacementProcessingOptions['acquisition_window'] }))}>
+                        <option value="secondary-acquisition-in-window">Secondary within date window</option><option value="both-acquisitions-in-window">Both within date window</option>
+                      </select></label>
+                      <label>Retained data<select aria-label="Retained data" value={processingOptions.retention_mode} onChange={(event) => setProcessingOptions((current) => ({ ...current, retention_mode: event.target.value as DisplacementProcessingOptions['retention_mode'] }))}>
+                        <option value="derived-only">Validated derived outputs</option><option value="full-lossless">Full lossless archive</option>
+                      </select></label>
+                      <p>Dates are inclusive. The default permits an earlier reference acquisition. Pilot runs process a bounded subset and report omissions. Derived outputs support the enabled analyses; they do not replace unrestricted raw data.</p>
+                    </details>
                     <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading) || isDisplacementSubmitting} onClick={() => void openDisplacements()}>{isDisplacementSubmitting ? 'Starting processing…' : 'Find Displacements'}</button>
                   </article>
                 </div>

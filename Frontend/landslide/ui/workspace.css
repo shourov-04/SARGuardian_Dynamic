@@ -283,3 +283,14 @@
 @media (prefers-reduced-motion: reduce) {
   .landslide-route-shell button { transition: none; }
 }
+
+/* Results produced by the unchanged upstream workflow (summary, product table, ZIP download). */
+.github-results { margin-top: 18px; }
+.github-results h2 { margin: 0 0 8px; }
+.github-results .investigate-button { min-width: 220px; }
+.github-results-products { margin-top: 12px; }
+.github-results-products summary { cursor: pointer; font-size: 12px; }
+.github-results-table-wrap { max-height: 320px; margin-top: 8px; overflow: auto; border: 1px solid rgba(231, 255, 242, .12); border-radius: 4px; }
+.github-results-table-wrap table { width: 100%; border-collapse: collapse; color: inherit; font-size: 11px; }
+.github-results-table-wrap th, .github-results-table-wrap td { padding: 6px 8px; border-bottom: 1px solid rgba(231, 255, 242, .08); text-align: left; white-space: nowrap; }
+.github-results-table-wrap th { position: sticky; top: 0; background: rgba(5, 45, 57, .96); }
