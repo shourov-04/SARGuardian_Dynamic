@@ -92,14 +92,20 @@ def test_account_workflow_calls_the_upstream_dynamic_aoi_streaming_pipeline() ->
     workflow = (root / ".github" / "workflows" / "sarguardian-displacement.yml").read_text(encoding="utf-8")
     dashboard = (root / ".github" / "workflows" / "sarguardian-aoi-wkt-dashboard.yml").read_text(encoding="utf-8")
     worker = (root / ".github" / "workflows" / "sarguardian-aoi-product-worker.yml").read_text(encoding="utf-8")
+    streaming = (root / "tools" / "run_aoi_streaming_batch.py").read_text(encoding="utf-8")
+    product_pipeline = (root / "tools" / "process_aoi_product.py").read_text(encoding="utf-8")
     uploader = (root / "tools" / "drive_resumable_upload.py").read_text(encoding="utf-8")
     assert "uses: ./.github/workflows/sarguardian-aoi-wkt-dashboard.yml" in workflow
     assert "aoi_wkt: ${{ inputs.aoi_wkt }}" in workflow
     assert "date_filter_mode: ${{ inputs.acquisition_window }}" in workflow
     assert "run_profile: full-aoi-baseline" in workflow
     assert "python tools/discover_aoi_products.py" in dashboard
-    assert "uses: ./.github/workflows/sarguardian-aoi-product-worker.yml" in dashboard
-    assert dashboard.count("job_id: ${{ inputs.job_id }}") >= 2
+    assert "python -u tools/run_aoi_streaming_batch.py" in dashboard
+    assert "uses: ./.github/workflows/sarguardian-aoi-product-worker.yml" not in dashboard
+    assert "max-parallel:" not in dashboard
+    assert dashboard.count("Install pinned science and retention dependencies once") == 1
+    assert "timeout-minutes: 345" in dashboard
+    assert "name: sarguardian-stream-products" in dashboard
     assert '--job-id "$DRIVE_JOB_ID"' in dashboard
     assert 'DRIVE_JOB_ID: ${{ inputs.job_id }}' in worker
     assert worker.count('--job-id "$DRIVE_JOB_ID"') == 3
@@ -108,13 +114,22 @@ def test_account_workflow_calls_the_upstream_dynamic_aoi_streaming_pipeline() ->
     assert "--aoi \"$AOI_NAME\"" in worker
     assert "SCIENCE_COMMIT: 10639a916c9829850775410b3ed7de62e527770d" in worker
     assert 'PYTHONUNBUFFERED: "1"' in worker
+    assert 'environment["PYTHONUNBUFFERED"] = "1"' in streaming
+    assert '"maximum_simultaneous_raw_products": 1' in streaming
+    assert '"tools/process_aoi_product.py"' in streaming
+    assert "tools/drive_resumable_upload.py" in product_pipeline
+    assert product_pipeline.count('"--job-id", self.args.job_id') == 1
+    assert "gunw_reader.py" in product_pipeline
+    assert "goff_reader.py" in product_pipeline
+    assert "self.raw_path.unlink()" in product_pipeline
+    assert product_pipeline.index('retention.get("remote_verification") != "PASS"') < product_pipeline.index("self.raw_path.unlink()")
     for milestone in (
         "PRODUCT_PROCESSING_START", "PRODUCT_MILESTONE=download_started",
         "PRODUCT_MILESTONE=aoi_validation_started", "PRODUCT_MILESTONE=science_reader_started",
         "PRODUCT_MILESTONE=derived_validation_started", "PRODUCT_MILESTONE=drive_upload_started",
         "PRODUCT_MILESTONE=cleanup_started", "PRODUCT_PROCESSING_STATUS=",
     ):
-        assert milestone in worker
+        assert milestone in product_pipeline
     run_blocks = "\n".join(
         line for line in worker.splitlines()
         if not line.lstrip().startswith(("EARTHDATA_", "GOOGLE_DRIVE_"))

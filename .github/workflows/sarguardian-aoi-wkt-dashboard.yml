@@ -203,109 +203,99 @@ jobs:
           retention-days: 14
 
   process-products:
-    name: Process AOI product — ${{ matrix.id }}
+    name: Process all AOI products sequentially
     needs: manifest
     if: needs.manifest.result == 'success'
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include: ${{ fromJSON(needs.manifest.outputs.matrix) }}
-    uses: ./.github/workflows/sarguardian-aoi-product-worker.yml
-    with:
-      aoi_wkt: ${{ inputs.aoi_wkt }}
-      orchestration_sha: ${{ needs.manifest.outputs.orchestration_sha }}
-      product_id: ${{ matrix.id }}
-      granule_name: ${{ matrix.granule_name }}
-      product_type: ${{ matrix.product_type }}
-      maturity: ${{ matrix.maturity }}
-      expected_source_bytes: ${{ matrix.expected_source_bytes }}
-      retention_profile: ${{ inputs.retention_profile }}
-      execution_label: initial
-      job_id: ${{ inputs.job_id }}
-    secrets: inherit
-
-  retry-plan:
-    name: Validate product and post-cleanup receipts
-    needs: [manifest, process-products]
-    if: always() && needs.manifest.result == 'success'
     runs-on: ubuntu-24.04
-    outputs:
-      retry_matrix: ${{ steps.plan.outputs.retry_matrix }}
-      retry_count: ${{ steps.plan.outputs.retry_count }}
-      terminal_failure_count: ${{ steps.plan.outputs.terminal_failure_count }}
+    # Keep the complete sequential science stream below GitHub's six-hour job ceiling.
+    timeout-minutes: 345
+    env:
+      PYTHONUNBUFFERED: "1"
+      SARGUARDIAN_AOI_WKT: ${{ inputs.aoi_wkt }}
+      AOI_ORCHESTRATION_SHA: ${{ needs.manifest.outputs.orchestration_sha }}
+      SCIENCE_COMMIT: 10639a916c9829850775410b3ed7de62e527770d
+      RETENTION_PROFILE: ${{ inputs.retention_profile }}
+      DRIVE_JOB_ID: ${{ inputs.job_id }}
+      DRIVE_VERSION_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+      EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
+      EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
+      EARTHDATA_TOKEN: ${{ secrets.EARTHDATA_TOKEN }}
+      GOOGLE_DRIVE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_JSON }}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+      GOOGLE_DRIVE_PARENT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PARENT_FOLDER_ID || secrets.GOOGLE_DRIVE_FOLDER_ID }}
     steps:
-      - name: Checkout receipt-check tools at the manifest's exact code revision
+      - name: Checkout orchestration code at the manifest revision
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.manifest.outputs.orchestration_sha }}
 
-      - name: Download AOI run manifest
-        uses: actions/download-artifact@v4
-        with:
-          name: sarguardian-aoi-run-manifest
-          path: ${{ runner.temp }}/sarguardian-aoi/retry/manifest
-
-      - name: Download product checkpoints
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: sarguardian-granule-*
-          path: ${{ runner.temp }}/sarguardian-aoi/retry/products
-
-      - name: Download cleanup receipts
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: sarguardian-cleanup-*
-          path: ${{ runner.temp }}/sarguardian-aoi/retry/cleanups
-
-      - name: Identify only missing or invalid product checkpoints
-        id: plan
+      - name: Verify orchestration revision
         shell: bash
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/sarguardian-aoi/retry"
-          python tools/plan_aoi_retries.py \
-            --manifest "$root/manifest/manifest.json" \
-            --product-root "$root/products" --cleanup-root "$root/cleanups" \
-            --out "$root/retry-plan.json"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$AOI_ORCHESTRATION_SHA"
+          echo "AOI_ORCHESTRATION_REVISION_VERIFIED=$actual"
 
-      - name: Preserve retry decision evidence
+      - name: Checkout the pinned dynamic-AOI scientific engine once
+        uses: actions/checkout@v4
+        with:
+          repository: moshiour0/SARGuardian
+          ref: 10639a916c9829850775410b3ed7de62e527770d
+          path: science-source
+
+      - name: Verify pinned science revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C science-source rev-parse HEAD)"
+          test "$actual" = "$SCIENCE_COMMIT"
+          echo "SCIENCE_REVISION_VERIFIED=$actual"
+
+      - name: Set up Python once for the complete product stream
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          check-latest: false
+
+      - name: Install pinned science and retention dependencies once
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r science-source/requirements.txt
+          python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r tools/requirements-retention.txt
+
+      - name: Download the exact AOI run manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: sarguardian-aoi-run-manifest
+          path: ${{ runner.temp }}/sarguardian-aoi/stream/manifest
+
+      - name: Download, process, upload, verify and clean one granule at a time
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sarguardian-aoi/stream"
+          python -u tools/run_aoi_streaming_batch.py \
+            --manifest "$root/manifest/manifest.json" \
+            --science-root "$PWD/science-source" \
+            --work-root "$root/work" --checkpoint-root "$root/checkpoints" \
+            --retention-profile "$RETENTION_PROFILE" \
+            --job-id "$DRIVE_JOB_ID" --drive-version-tag "$DRIVE_VERSION_TAG" \
+            --orchestration-sha "$AOI_ORCHESTRATION_SHA"
+
+      - name: Preserve all product and cleanup checkpoints together
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sarguardian-aoi-retry-plan
-          path: ${{ runner.temp }}/sarguardian-aoi/retry/retry-plan.json
+          name: sarguardian-stream-products
+          path: ${{ runner.temp }}/sarguardian-aoi/stream/checkpoints
           if-no-files-found: warn
           retention-days: 14
 
-  retry-products:
-    name: Retry AOI product — ${{ matrix.id }}
-    needs: [manifest, retry-plan]
-    if: needs.retry-plan.result == 'success' && needs.retry-plan.outputs.retry_count != '0'
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include: ${{ fromJSON(needs.retry-plan.outputs.retry_matrix) }}
-    uses: ./.github/workflows/sarguardian-aoi-product-worker.yml
-    with:
-      aoi_wkt: ${{ inputs.aoi_wkt }}
-      orchestration_sha: ${{ needs.manifest.outputs.orchestration_sha }}
-      product_id: ${{ matrix.id }}
-      granule_name: ${{ matrix.granule_name }}
-      product_type: ${{ matrix.product_type }}
-      maturity: ${{ matrix.maturity }}
-      expected_source_bytes: ${{ matrix.expected_source_bytes }}
-      retention_profile: ${{ inputs.retention_profile }}
-      execution_label: retry-1
-      job_id: ${{ inputs.job_id }}
-    secrets: inherit
-
   dashboard:
     name: Assemble results dashboard and downloadable maps
-    needs: [manifest, process-products, retry-plan, retry-products]
+    needs: [manifest, process-products]
     if: always() && needs.manifest.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -357,12 +347,12 @@ jobs:
           name: sarguardian-aoi-run-manifest
           path: ${{ runner.temp }}/sarguardian-aoi/manifest
 
-      - name: Download product processing receipts and clipped exports
+      - name: Download sequential product processing receipts and clipped exports
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          pattern: sarguardian-granule-*
-          path: ${{ runner.temp }}/sarguardian-aoi/product-artifacts
+          name: sarguardian-stream-products
+          path: ${{ runner.temp }}/sarguardian-aoi/stream-products
 
       - name: Build dashboard, product table, quicklooks and result bundle
         id: aggregate
@@ -374,7 +364,7 @@ jobs:
           status=0
           python tools/aggregate_aoi_run.py \
             --manifest "$root/manifest/manifest.json" \
-            --artifact-root "$root/product-artifacts" \
+            --artifact-root "$root/stream-products/products" \
             --science-root "$PWD/science-source" \
             --out-root "$root/dashboard" 2>&1 | tee "$root/dashboard-build.log" || status=$?
           echo "script_exit=$status" >> "$GITHUB_OUTPUT"

@@ -54,5 +54,12 @@ Those workflows and their processing tools are the integration source used here.
   `GOOGLE_DRIVE_FOLDER_ID` secret can provide the private retention root.
 - Account processing creates `<private-retention-root>/<job-id>` and keeps the final
   bundle plus every per-product retained result inside that job-scoped tree.
+- The product stream now stays on one GitHub runner: Python and the pinned science
+  dependencies are prepared once, then every manifest product is downloaded,
+  processed, verified, uploaded, and cleaned in order. The next raw granule is not
+  downloaded until the previous granule's verified cleanup finishes, so at most one
+  raw HDF5 is present on the runner. A retryable product gets one bounded retry in
+  the same prepared runner. The streaming job has a 345-minute timeout, below the
+  six-hour hosted-runner ceiling.
 
 Frontend source is intentionally outside this integration and remains unchanged.
