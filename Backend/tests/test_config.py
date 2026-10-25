@@ -81,3 +81,38 @@ def test_enabled_displacement_actions_requires_server_only_settings() -> None:
         assert "GITHUB_ACTIONS_TOKEN" in str(error)
     else:
         raise AssertionError("enabled Actions integration unexpectedly accepted missing settings")
+
+
+def test_external_mode_keeps_callback_as_default_and_does_not_require_callback_secrets() -> None:
+    assert config.get_settings({}).displacement_workflow_mode == "callback"
+    settings = config.get_settings({
+        "APP_ENV": "production", "CORS_ORIGINS": "https://app.example.test",
+        "SUPABASE_URL": "https://project.supabase.co", "SUPABASE_SERVICE_ROLE_KEY": "sb_secret_test_only",
+        "DISPLACEMENT_ACTIONS_ENABLED": "true", "DISPLACEMENT_WORKFLOW_MODE": "external",
+        "GITHUB_ACTIONS_TOKEN": "github_pat_test_only", "GITHUB_ACTIONS_REPOSITORY": "owner/repository",
+        "GITHUB_ACTIONS_WORKFLOW": "external.yml", "GITHUB_ACTIONS_REF": "main",
+    })
+    assert config.validate_production_settings(settings) == settings
+
+
+def test_invalid_external_mode_or_repository_is_rejected_safely() -> None:
+    try:
+        config.get_settings({"DISPLACEMENT_WORKFLOW_MODE": "unexpected"})
+    except config.SettingsError as error:
+        assert str(error) == "DISPLACEMENT_WORKFLOW_MODE is invalid."
+    else:
+        raise AssertionError("invalid workflow mode was accepted")
+
+    settings = config.get_settings({
+        "APP_ENV": "production", "CORS_ORIGINS": "https://app.example.test",
+        "SUPABASE_URL": "https://project.supabase.co", "SUPABASE_SERVICE_ROLE_KEY": "sb_secret_test_only",
+        "DISPLACEMENT_ACTIONS_ENABLED": "true", "DISPLACEMENT_WORKFLOW_MODE": "external",
+        "GITHUB_ACTIONS_TOKEN": "github_pat_test_only", "GITHUB_ACTIONS_REPOSITORY": "invalid",
+        "GITHUB_ACTIONS_WORKFLOW": "external.yml", "GITHUB_ACTIONS_REF": "main",
+    })
+    try:
+        config.validate_production_settings(settings)
+    except config.SettingsError as error:
+        assert str(error) == "GITHUB_ACTIONS_REPOSITORY must look like owner/repository."
+    else:
+        raise AssertionError("invalid external repository was accepted")

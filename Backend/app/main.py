@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse, Response
 
+from . import external_workflow
 from .asf_catalog import ASFAdapterError, ASFAdapterNotConfigured, normalize_product_rows, search_asf_catalog
 from .auth import get_current_user
 from .config import SettingsError, get_settings, validate_production_settings
@@ -329,6 +330,28 @@ def _validate_displacement_request(request: CreateDisplacementJobRequest) -> Non
         raise HTTPException(status_code=422, detail="Account displacement processing uses the fixed production processing contract.")
 
 
+def _dispatch_for_mode(settings, job_id: UUID, request: CreateDisplacementJobRequest) -> dict:
+    """Dispatch through the configured mode without changing the default callback pipeline."""
+    if external_workflow.is_external_mode(settings):
+        if not getattr(settings, "displacement_actions_enabled", False):
+            raise external_workflow.ExternalDispatchError("Displacement processing is not configured on this server.")
+        run = external_workflow.dispatch(
+            settings,
+            external_workflow.build_dispatch_inputs(
+                aoi_wkt=request.aoi_wkt,
+                start_date=request.start_date.isoformat(),
+                end_date=request.end_date.isoformat(),
+                acquisition_window=request.acquisition_window,
+                retention_mode=request.retention_mode,
+                processing_profile=request.processing_profile,
+                product_type=request.product_type,
+            ),
+        )
+        return {"github_run_id": run.run_id, "github_run_url": run.html_url}
+    dispatch_workflow(settings, job_id, request)
+    return {}
+
+
 def _create_and_dispatch_displacement_job(owner_uid: str, request: CreateDisplacementJobRequest, store) -> DisplacementJobResponse:
     try:
         existing = store.get_displacement_job_by_idempotency(owner_uid, request.idempotency_key)
@@ -349,6 +372,7 @@ def _create_and_dispatch_displacement_job(owner_uid: str, request: CreateDisplac
         raise HTTPException(status_code=409, detail="A different processing configuration is already active for this AOI and date window.")
     if active_jobs:
         raise HTTPException(status_code=429, detail="This account already has an active scientific processing job. Wait for it to finish or cancel it before submitting another.")
+    settings = get_settings()
     values = {
         "owner_uid": owner_uid,
         "idempotency_key": request.idempotency_key,
@@ -358,7 +382,7 @@ def _create_and_dispatch_displacement_job(owner_uid: str, request: CreateDisplac
         "end_date": request.end_date.isoformat(),
         **{name: getattr(request, name) for name in PROCESSING_OPTION_DEFAULTS},
         "request_fingerprint": displacement_request_fingerprint(request.model_dump()),
-        "worker_contract_version": 2,
+        "worker_contract_version": None if external_workflow.is_external_mode(settings) else 2,
         "stage": "queued",
     }
     try:
@@ -373,16 +397,19 @@ def _create_and_dispatch_displacement_job(owner_uid: str, request: CreateDisplac
         raise HTTPException(status_code=503, detail="Could not persist the displacement job.") from None
     job_id = UUID(str(record["id"]))
     try:
-        dispatch_workflow(get_settings(), job_id, request)
-        record = store.update_displacement_job(job_id, {"state": JobState.DISPATCHING.value, "stage": "dispatching"})
-    except GitHubDispatchError as exc:
+        run_details = _dispatch_for_mode(settings, job_id, request)
+        record = store.update_displacement_job(
+            job_id,
+            {"state": JobState.DISPATCHING.value, "stage": "dispatching", **run_details},
+        )
+    except (GitHubDispatchError, external_workflow.ExternalWorkflowError) as exc:
         logger.warning("Displacement dispatch failed for job %s: %s", job_id, exc)
         try:
             record = store.update_displacement_job(job_id, {
                 "state": JobState.FAILED.value,
                 "stage": "dispatch_failed",
-                "error_code": "GITHUB_DISPATCH_FAILED",
-                "error_message": str(exc),
+                "error_code": getattr(exc, "code", "GITHUB_DISPATCH_FAILED"),
+                "error_message": str(exc)[:500],
             })
         except PersistenceError:
             raise HTTPException(status_code=503, detail="Displacement dispatch failed and its status could not be persisted.") from None
@@ -495,6 +522,8 @@ def get_displacement_job(job_id: UUID, user: dict = Depends(get_current_user)) -
     if not record:
         raise HTTPException(status_code=404, detail="Displacement job was not found for this user.")
     settings = get_settings()
+    if _is_external_job(settings, record):
+        return _displacement_response(_refresh_external_job(store, record, settings))
     if settings.displacement_actions_enabled and record.get("state") == JobState.DISPATCHING.value:
         discovered_run = find_dispatched_workflow_run(settings, job_id)
         if discovered_run:
@@ -530,6 +559,41 @@ def get_displacement_job(job_id: UUID, user: dict = Depends(get_current_user)) -
     return _displacement_response(record)
 
 
+def _is_external_job(settings, record: dict) -> bool:
+    """External jobs have no callback contract and are polled only in explicit external mode."""
+    return (
+        external_workflow.is_external_mode(settings)
+        and bool(getattr(settings, "displacement_actions_enabled", False))
+        and record.get("worker_contract_version") is None
+    )
+
+
+def _refresh_external_job(store, record: dict, settings) -> dict:
+    """Refresh an external job while keeping status reads resilient and rate limited."""
+    if record.get("state") not in {JobState.DISPATCHING.value, JobState.RUNNING.value}:
+        return record
+    job_id = UUID(str(record["id"]))
+    if not external_workflow.should_poll(str(job_id)):
+        return record
+    try:
+        steps = external_workflow.plan_refresh(settings, record)
+    except Exception:  # noqa: BLE001 - a transient GitHub problem must not break status reads
+        logger.warning("Could not refresh the external workflow state for job %s.", job_id, exc_info=True)
+        return record
+    current = record
+    for step in steps:
+        try:
+            current = store.update_displacement_job(job_id, step.values, expected_state=step.expected_state)
+        except PersistenceConflictError:
+            try:
+                return store.get_displacement_job_unscoped(job_id) or current
+            except PersistenceError:
+                return current
+        except PersistenceError:
+            raise HTTPException(status_code=503, detail="Could not persist the workflow state.") from None
+    return current
+
+
 @app.post("/api/displacement-jobs/{job_id}/callback")
 async def update_displacement_job_from_worker(job_id: UUID, request: Request) -> dict[str, str]:
     body = await request.body()
@@ -544,6 +608,8 @@ async def update_displacement_job_from_worker(job_id: UUID, request: Request) ->
         raise HTTPException(status_code=503, detail="Could not read worker job state.") from None
     if not record:
         raise HTTPException(status_code=404, detail="Displacement job was not found.")
+    if _is_external_job(settings, record):
+        raise HTTPException(status_code=409, detail="External workflow jobs do not accept worker callbacks.")
     if record.get("worker_contract_version") == 2:
         if payload.contract_version != 2 or payload.job_id != job_id:
             raise HTTPException(status_code=409, detail="Worker callback is not bound to this version-2 job.")
@@ -651,6 +717,35 @@ async def download_displacement_artifact(job_id: UUID, artifact_index: int, user
         "Content-Disposition": f'attachment; filename="{filename}"',
         "Cache-Control": "private, no-store",
     })
+
+
+@app.get("/api/displacement-jobs/{job_id}/result-link")
+def get_displacement_result_link(job_id: UUID, user: dict = Depends(get_current_user)) -> JSONResponse:
+    """Issue an owner-only, short-lived link to an external workflow result ZIP."""
+    try:
+        record = _require_store().get_displacement_job(_required_owner_uid(user), job_id)
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not read the displacement job.") from None
+    summary = record.get("result_summary") if record else None
+    if (
+        not record
+        or record.get("state") != JobState.SUCCEEDED.value
+        or not isinstance(summary, dict)
+        or summary.get("source") != external_workflow.RESULT_SOURCE
+    ):
+        raise HTTPException(status_code=404, detail="No downloadable result package was found for this job.")
+    try:
+        url, filename = external_workflow.result_download_link(get_settings(), summary)
+    except external_workflow.ArtifactUnavailableError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from None
+    except external_workflow.GitHubApiError:
+        raise HTTPException(status_code=503, detail="GitHub result storage is unavailable. Retry the download.") from None
+    except external_workflow.ExternalWorkflowError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    return JSONResponse(
+        content={"url": url, "filename": filename, "expires_in_seconds": 60},
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 if __name__ == "__main__":

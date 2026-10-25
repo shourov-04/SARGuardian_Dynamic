@@ -250,6 +250,32 @@ export async function downloadDisplacementArtifact(
   return response.blob();
 }
 
+export type DisplacementResultLink = { url: string; filename: string; expires_in_seconds: number };
+
+export async function getDisplacementResultLink(
+  jobId: string,
+  user: Pick<User, 'getIdToken'> | null,
+): Promise<DisplacementResultLink> {
+  const safeId = jobId.trim();
+  if (!safeId) throw new Error('A displacement job ID is required.');
+  const link = await readAuthenticatedPayload<DisplacementResultLink>(
+    `${API_BASE}/api/displacement-jobs/${encodeURIComponent(safeId)}/result-link`,
+    user,
+    'Could not prepare the result download.',
+    { cache: 'no-store' },
+  );
+  let target: URL;
+  try {
+    target = new URL(link.url);
+  } catch {
+    throw new Error('The result download link is invalid.');
+  }
+  if (target.protocol !== 'https:' || target.username || target.password) {
+    throw new Error('The result download link is not secure.');
+  }
+  return link;
+}
+
 export async function getDisplacementJob(jobId: string, user: Pick<User, 'getIdToken'> | null): Promise<DisplacementJob> {
   const safeId = jobId.trim();
   if (!safeId) throw new Error('A displacement job ID is required.');

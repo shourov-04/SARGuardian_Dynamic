@@ -114,4 +114,26 @@ describe('displacement preparation route', () => {
     expect(html).not.toContain('Input products');
     expect(html).not.toContain('Retained scientific outputs');
   });
+
+  it('shows only one owner-scoped download action for an external result', () => {
+    const succeededJob = {
+      id: 'external-job', state: 'succeeded', stage: 'completed',
+      aoi_wkt: 'POLYGON((85 27, 85.01 27, 85 27.01, 85 27))',
+      start_date: '2026-09-27', end_date: '2026-10-24',
+      created_at: '2026-10-24T10:00:00Z', updated_at: '2026-10-24T10:10:00Z',
+      result_summary: {
+        source: 'github_artifact',
+        github_artifact: { name: 'sarguardian-aoi-dashboard-123-1' },
+        diagnostics: { pixel_stack: { status: 'PASS' } },
+        products: [{ product_type: 'GUNW' }],
+      },
+    } as const;
+
+    const html = renderToStaticMarkup(<ScientificResults job={succeededJob as never} user={user} />);
+
+    expect(html.match(/Download results/g)).toHaveLength(1);
+    expect(html).not.toContain('Scientific diagnostics');
+    expect(html).not.toContain('Inputs and processing provenance');
+    expect(html).not.toContain('GitHub run');
+  });
 });

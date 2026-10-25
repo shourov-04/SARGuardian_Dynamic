@@ -76,3 +76,22 @@ export function safeLegacyArtifactUrl(value: unknown): string | undefined {
     return url.protocol === 'https:' && !url.username && !url.password ? url.href : undefined;
   } catch { return undefined; }
 }
+
+export type GithubResultPackage = {
+  name: string;
+  sizeBytes?: number;
+  expiresAt?: string;
+};
+
+export function readGithubResultPackage(summary: unknown): GithubResultPackage | undefined {
+  const record = asRecord(summary);
+  if (record.source !== 'github_artifact') return undefined;
+  const artifact = asRecord(record.github_artifact);
+  const name = textValue(artifact.name);
+  if (!/^[A-Za-z0-9._-]{1,200}$/.test(name)) return undefined;
+  return {
+    name,
+    sizeBytes: numericValue(artifact.size_in_bytes),
+    expiresAt: textValue(artifact.expires_at) || undefined,
+  };
+}

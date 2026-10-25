@@ -36,8 +36,9 @@ function resultGranuleCounts(job: DisplacementJob): GranuleCounts | null {
 
 type PendingAction = 'cancel' | 'refresh' | 'retry' | null;
 
-export function DisplacementJobStatus({ job, pendingAction, clock, granuleCounts, onCancel, onRefresh, onRetry, onBack }: {
+export function DisplacementJobStatus({ job, pendingAction, clock, granuleCounts, onCancel, onRefresh, onRetry, onBack, user = null }: {
   job: DisplacementJob;
+  user?: Pick<User, 'getIdToken'> | null;
   pendingAction: PendingAction;
   clock: number;
   granuleCounts: GranuleCounts | null;
@@ -70,7 +71,7 @@ export function DisplacementJobStatus({ job, pendingAction, clock, granuleCounts
       <button type="button" className="investigate-button" disabled={busy} onClick={onRetry}>{pendingAction === 'retry' ? 'Retrying…' : 'Retry task'}</button>
       <button type="button" className="demo-button" disabled={busy} onClick={onBack}>Go to map</button>
     </div>}
-    <ScientificResults job={job} />
+    <ScientificResults job={job} user={user} />
   </section>;
 }
 
@@ -241,7 +242,7 @@ export function DisplacementPreparation({ preparation, options = DEFAULT_DISPLAC
       <span className="result-kicker">DISPLACEMENT PROCESSING</span>
       <h1>Find Displacements</h1>
       <p>Your processing task belongs to this signed-in account and continues if you close the browser. Reopen this page to see its current state.</p>
-      {job && <DisplacementJobStatus job={job} pendingAction={pendingAction} clock={clock} granuleCounts={granuleCounts}
+      {job && <DisplacementJobStatus job={job} pendingAction={pendingAction} clock={clock} granuleCounts={granuleCounts} user={user}
         onCancel={() => void cancel()} onRefresh={() => void refreshManually()}
         onRetry={() => void retryFailed()} onBack={onBack} />}
       {jobError && <><p role="alert">{jobError}</p>{!job && <button type="button" className="demo-button" onClick={onBack}>Go to map</button>}</>}
