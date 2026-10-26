@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import type { Engine } from './data/engineData';
 import { listDisplacementJobs } from './api/catalog';
 import { Home } from './pages/Home';
 import { LandslidePage } from '../landslide/ui/LandslidePage';
+import { isLangtangExplorerEnabled } from '../landslide/langtang/feature';
 import { auth, firebaseConfigured, googleProvider, missingFirebaseConfig } from './firebase';
-import { isLandslideDisplacementRoute, isLandslideResultsRoute, isLandslideRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
+import { isLandslideDisplacementRoute, isLandslideLangtangRoute, isLandslideResultsRoute, isLandslideRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_LANGTANG_PATH, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
+
+const LangtangExplorerPage = lazy(() => import('../landslide/langtang/LangtangExplorerPage')
+  .then((module) => ({ default: module.LangtangExplorerPage })));
 
 function App() {
   const [pathname, setPathname] = useState(() => normalizePathname(window.location.pathname));
@@ -158,6 +162,18 @@ function App() {
       );
     }
 
+    if (isLandslideLangtangRoute(pathname)) {
+      return <Suspense fallback={<main className="langtang-unavailable" role="status">Loading Langtang explorer…</main>}>
+        <LangtangExplorerPage
+          enabled={isLangtangExplorerEnabled()}
+          user={user}
+          onHome={() => navigateTo('/')}
+          onBack={() => navigateTo(LANDSLIDE_PATH)}
+          onSignOut={handleSignOut}
+        />
+      </Suspense>;
+    }
+
     return (
       <LandslidePage
         key={user.uid}
@@ -166,6 +182,8 @@ function App() {
         isResultsPage={isLandslideResultsRoute(pathname)}
         isDisplacementPage={isLandslideDisplacementRoute(pathname)}
         onDisplacements={() => navigateTo(LANDSLIDE_DISPLACEMENT_PATH)}
+        onLangtangExplorer={() => navigateTo(LANDSLIDE_LANGTANG_PATH)}
+        showLangtangExplorer={isLangtangExplorerEnabled()}
         onResults={() => navigateTo(LANDSLIDE_RESULTS_PATH)}
         onBackToMap={() => navigateTo(LANDSLIDE_PATH)}
         onDisplacementTaskActivityChange={setHasActiveDisplacementTask}

@@ -1,9 +1,14 @@
 export const LANDSLIDE_PATH = '/landslide';
 export const LANDSLIDE_RESULTS_PATH = '/landslide/results';
 export const LANDSLIDE_DISPLACEMENT_PATH = '/landslide/displacements';
+export const LANDSLIDE_LANGTANG_PATH = '/landslide/langtang';
 
 export function isLandslideDisplacementRoute(pathname: string): boolean {
   return normalizePathname(pathname) === LANDSLIDE_DISPLACEMENT_PATH;
+}
+
+export function isLandslideLangtangRoute(pathname: string): boolean {
+  return normalizePathname(pathname) === LANDSLIDE_LANGTANG_PATH;
 }
 
 export function normalizePathname(pathname: string): string {

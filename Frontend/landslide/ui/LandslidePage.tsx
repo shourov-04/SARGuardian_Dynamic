@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import type { User } from 'firebase/auth';
+import { configureGoogleMaps, importLibrary } from '../../src/googleMaps';
 import { analyzeGunwAoiQuality, createDisplacementJob, createQueuedJob, DEFAULT_DISPLACEMENT_OPTIONS, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
 import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
 import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validatePolyline } from '../engine/validation';
@@ -14,7 +14,6 @@ import type { Coordinate, InvestigationResult, LocationSelection } from '../engi
 import './landslide.css';
 import './workspace.css';
 
-let mapsLoaderConfigured = false;
 const MIN_MAP_ZOOM = 5;
 const DEFAULT_MAP_ZOOM = 5;
 
@@ -64,16 +63,9 @@ function MapCanvas({ location, searchText, coordinates, areaClosed, drawing, sel
     let active = true;
     let mapClickListener: google.maps.MapsEventListener | undefined;
     const autocompleteEvents = new AbortController();
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
-
-    if (!apiKey) {
+    if (!configureGoogleMaps()) {
       setMapError('Google Maps is not configured. Location search and saved investigation details remain available.');
       return undefined;
-    }
-
-    if (!mapsLoaderConfigured) {
-      setOptions({ key: apiKey, v: 'weekly' });
-      mapsLoaderConfigured = true;
     }
 
     void Promise.all([importLibrary('maps'), importLibrary('geometry')])
@@ -999,7 +991,7 @@ function loadSubmittedHarmonyJobs(): SubmittedHarmonyLayerJob[] {
   }
 }
 
-export function LandslidePage({ user, onHome, onResults, onDisplacements, onBackToMap, onDisplacementTaskActivityChange, isResultsPage, isDisplacementPage, onSignOut }: {
+export function LandslidePage({ user, onHome, onResults, onDisplacements, onLangtangExplorer, showLangtangExplorer = false, onBackToMap, onDisplacementTaskActivityChange, isResultsPage, isDisplacementPage, onSignOut }: {
   user: User;
   onHome: () => void;
   onResults: () => void;
@@ -1008,6 +1000,8 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   isResultsPage: boolean;
   isDisplacementPage: boolean;
   onDisplacements: () => void;
+  onLangtangExplorer?: () => void;
+  showLangtangExplorer?: boolean;
   onSignOut: () => void;
 }) {
   const [initialSessionState] = useState(() => loadLandslideSessionState(user.uid));
@@ -2197,6 +2191,11 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                     <h3>Find Displacements</h3>
                     <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading) || isDisplacementSubmitting} onClick={() => void openDisplacements()}>{isDisplacementSubmitting ? 'Starting processing…' : 'Find Displacements'}</button>
                   </article>
+                  {showLangtangExplorer && onLangtangExplorer && <article className="investigation-mode-card langtang-mode">
+                    <span className="mode-icon" aria-hidden="true"><Icon name="layers" /></span>
+                    <h3>Langtang Surface Change Explorer</h3>
+                    <button className="investigate-button" type="button" onClick={onLangtangExplorer}>Open historical observations</button>
+                  </article>}
                 </div>
               </section>
             </>

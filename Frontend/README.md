@@ -52,6 +52,16 @@ For Vercel, set the project root to `Frontend/`, use the Vite preset, build comm
 before building. The backend is a separate Vercel project rooted at `Backend/`; set its
 server-side variables in that project only. The included SPA rewrite supports opening `/landslide` directly.
 
+## Optional Langtang historical observation explorer
+
+SG-001 adds the authenticated `/landslide/langtang` route behind
+`VITE_LANGTANG_EXPLORER_ENABLED=false`. It remains absent from the normal map UI
+until the two verified run `40212069747` GOFF assets have been exported into the
+static data directory. See
+[`../docs/LANGTANG_SURFACE_CHANGE_EXPLORER.md`](../docs/LANGTANG_SURFACE_CHANGE_EXPLORER.md)
+for the exact source contract, offline exporter command, scientific limitations,
+and local preview steps. The route never infers numeric values from PNG colors.
+
 ## Included files
 
 - `src/`: home page, navigation, components, styles, Firebase configuration.
