@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import type { Engine } from './data/engineData';
-import { getDisplacementJob, listDisplacementJobs } from './api/catalog';
+import { getDisplacementJob, listDisplacementJobs, type DisplacementJob } from './api/catalog';
 import { Home } from './pages/Home';
 import { LandslidePage } from '../landslide/ui/LandslidePage';
 import { isLangtangExplorerEnabled } from '../landslide/langtang/feature';
@@ -11,6 +11,8 @@ import { isLandslideDisplacementRoute, isLandslideLangtangRoute, isLandslideResu
 
 const LangtangExplorerPage = lazy(() => import('../landslide/langtang/LangtangExplorerPage')
   .then((module) => ({ default: module.LangtangExplorerPage })));
+const JobResultExplorerPage = lazy(() => import('../landslide/langtang/JobResultExplorerPage')
+  .then((module) => ({ default: module.JobResultExplorerPage })));
 
 function App() {
   const [pathname, setPathname] = useState(() => normalizePathname(window.location.pathname));
@@ -21,7 +23,7 @@ function App() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<string | null>(null);
   const [hasActiveDisplacementTask, setHasActiveDisplacementTask] = useState(false);
-  const [viewerAccess, setViewerAccess] = useState<{ jobId: string; state: 'loading' | 'allowed' | 'denied' } | null>(null);
+  const [viewerAccess, setViewerAccess] = useState<{ jobId: string; state: 'loading' | 'allowed' | 'denied'; job?: DisplacementJob } | null>(null);
 
   const navigateTo = useCallback((nextPath: string) => {
     const normalizedPath = navigatePath(nextPath, window.location.pathname, window.history.pushState.bind(window.history));
@@ -63,7 +65,7 @@ function App() {
     const context = isLandslideLangtangRoute(pathname)
       ? resolveLangtangRouteContext(window.location.search)
       : null;
-    if (!user || !context || isLangtangExplorerEnabled()) {
+    if (!user || !context || (context.mode === 'static-langtang' && isLangtangExplorerEnabled())) {
       setViewerAccess(null);
       return undefined;
     }
@@ -74,6 +76,7 @@ function App() {
       setViewerAccess({
         jobId: context.jobId,
         state: visualizationForJob(job).available ? 'allowed' : 'denied',
+        job,
       });
     }).catch(() => {
       if (active) setViewerAccess({ jobId: context.jobId, state: 'denied' });
@@ -192,17 +195,38 @@ function App() {
       const contextVerified = viewerContext !== null
         && viewerAccess?.jobId === viewerContext.jobId
         && viewerAccess.state === 'allowed';
-      if (!flagEnabled && viewerContext && (!viewerAccess || viewerAccess.jobId !== viewerContext.jobId || viewerAccess.state === 'loading')) {
+      const requiresVerification = viewerContext?.mode === 'job' || (viewerContext !== null && !flagEnabled);
+      if (requiresVerification && viewerContext && (!viewerAccess || viewerAccess.jobId !== viewerContext.jobId || viewerAccess.state === 'loading')) {
         return <main className="langtang-unavailable" role="status">Verifying processing result…</main>;
       }
+      if (viewerContext?.mode === 'job') {
+        if (!contextVerified || !viewerAccess?.job) {
+          return <main className="langtang-unavailable" role="alert">
+            <span>DISPLACEMENT RESULT EXPLORER</span>
+            <h1>This task result cannot be visualized.</h1>
+            <p>The task is unavailable, incomplete, or no longer has a verified derived-result package.</p>
+            <button type="button" onClick={() => navigateTo(LANDSLIDE_DISPLACEMENT_PATH)}>Processing results</button>
+          </main>;
+        }
+        return <Suspense fallback={<main className="langtang-unavailable" role="status">Loading displacement result explorer…</main>}>
+          <JobResultExplorerPage
+            job={viewerAccess.job}
+            user={user}
+            onHome={() => navigateTo('/')}
+            onBack={() => navigateTo(viewerContext.returnPath)}
+            onSignOut={handleSignOut}
+          />
+        </Suspense>;
+      }
+      const staticContext = viewerContext?.mode === 'static-langtang' ? viewerContext : null;
       return <Suspense fallback={<main className="langtang-unavailable" role="status">Loading Langtang explorer…</main>}>
         <LangtangExplorerPage
-          enabled={canOpenLangtangExplorer(flagEnabled, contextVerified ? viewerContext : null)}
+          enabled={canOpenLangtangExplorer(flagEnabled, contextVerified ? staticContext : null)}
           user={user}
           onHome={() => navigateTo('/')}
-          onBack={() => navigateTo(viewerContext?.returnPath ?? LANDSLIDE_PATH)}
-          manifestPath={viewerContext?.manifestPath}
-          backLabel={viewerContext ? 'Processing results' : 'Displacement map'}
+          onBack={() => navigateTo(staticContext?.returnPath ?? LANDSLIDE_PATH)}
+          manifestPath={staticContext?.manifestPath}
+          backLabel={staticContext ? 'Processing results' : 'Displacement map'}
           onSignOut={handleSignOut}
         />
       </Suspense>;

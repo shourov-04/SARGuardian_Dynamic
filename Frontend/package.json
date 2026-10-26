@@ -13,6 +13,8 @@
   "dependencies": {
     "@googlemaps/js-api-loader": "^2.1.1",
     "firebase": "^12.0.0",
+    "geotiff": "^3.0.5",
+    "jszip": "^3.10.2",
     "proj4": "2.22.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

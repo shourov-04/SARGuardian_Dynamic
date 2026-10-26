@@ -11,79 +11,87 @@ function eligibleJob(overrides: Partial<DisplacementJob> = {}): DisplacementJob 
     id: JOB_ID,
     state: 'succeeded',
     stage: 'completed',
-    aoi_wkt: 'POLYGON ((85.463902000000004 28.357602, 85.378759000000002 28.208853000000001, 85.610157999999998 28.184949, 85.670584000000005 28.305019000000001, 85.463902000000004 28.357602))',
-    start_date: LANGTANG_DATASET.startDate,
-    end_date: LANGTANG_DATASET.endDate,
-    github_run_id: LANGTANG_DATASET.sourceRunId,
-    created_at: '2026-10-25T16:00:00Z',
-    updated_at: '2026-10-25T17:00:00Z',
+    aoi_wkt: LANGTANG_DATASET.aoiWkt,
+    start_date: '2026-09-01',
+    end_date: '2026-10-01',
+    github_run_id: '987654321',
+    created_at: '2026-10-01T16:00:00Z',
+    updated_at: '2026-10-01T17:00:00Z',
     result_summary: {
       scientific_status: 'PASS',
       validation: { status: 'PASS' },
-      provenance: {
-        aoi_sha256: LANGTANG_DATASET.aoiSha256,
-        github_run_id: LANGTANG_DATASET.sourceRunId,
-      },
-      github_artifact: {
-        run_id: LANGTANG_DATASET.sourceRunId,
-        run_attempt: LANGTANG_DATASET.sourceRunAttempt,
-      },
+      provenance: { aoi_sha256: 'a'.repeat(64), github_run_id: '987654321' },
+      artifacts: [{
+        path: 'aoi-derived-results.zip', kind: 'aoi_derived_result_bundle',
+        bytes: 12345, sha256: 'b'.repeat(64), drive_file_id: 'private-file-id-123',
+      }],
     },
     ...overrides,
   };
 }
 
-describe('run-scoped Langtang visualization availability', () => {
-  it('creates and resolves a route only for the verified completed run', () => {
+describe('job-scoped displacement visualization availability', () => {
+  it('creates and resolves a route for every verified completed result package', () => {
     const availability = visualizationForJob(eligibleJob());
     expect(availability.available).toBe(true);
     if (!availability.available) throw new Error(availability.reason);
     const url = new URL(availability.href, 'https://example.test');
     expect(url.pathname).toBe('/landslide/langtang');
-    expect(url.searchParams.get('dataset')).toBe(LANGTANG_DATASET.datasetId);
-    expect(url.searchParams.get('run')).toBe(LANGTANG_DATASET.sourceRunVersion);
+    expect(url.searchParams.get('mode')).toBe('job');
     expect(url.searchParams.get('job')).toBe(JOB_ID);
     expect(url.searchParams.get('return')).toBe(LANDSLIDE_DISPLACEMENT_PATH);
     expect(resolveLangtangRouteContext(url.search)).toEqual({
-      jobId: JOB_ID,
-      manifestPath: LANGTANG_DATASET.manifestPath,
-      returnPath: LANDSLIDE_DISPLACEMENT_PATH,
-      sourceRunVersion: LANGTANG_DATASET.sourceRunVersion,
+      mode: 'job', jobId: JOB_ID, returnPath: LANDSLIDE_DISPLACEMENT_PATH,
     });
+  });
+
+  it('supports a verified external workflow result package', () => {
+    const job = eligibleJob({
+      result_summary: {
+        source: 'github_artifact', scientific_status: 'PASS', validation: { status: 'PASS' },
+        provenance: { aoi_sha256: 'a'.repeat(64), github_run_id: '987654321' },
+        github_artifact: { name: 'sarguardian-aoi-dashboard-987654321-1', run_id: '987654321', run_attempt: 1 },
+      },
+    });
+    expect(visualizationForJob(job).available).toBe(true);
   });
 
   it.each(['queued', 'dispatching', 'running', 'failed'] as const)('does not expose the viewer for %s jobs', (state) => {
     expect(visualizationForJob(eligibleJob({ state })).available).toBe(false);
   });
 
-  it('fails closed when run, attempt, AOI, date, provenance or job identity differs', () => {
+  it('fails closed for invalid status, provenance, run identity or missing retained package', () => {
     const cases: DisplacementJob[] = [
-      eligibleJob({ github_run_id: '40212069748' }),
-      eligibleJob({ result_summary: {
-        scientific_status: 'PASS', validation: { status: 'PASS' },
-        provenance: { aoi_sha256: LANGTANG_DATASET.aoiSha256, github_run_id: LANGTANG_DATASET.sourceRunId },
-        github_artifact: { run_id: LANGTANG_DATASET.sourceRunId, run_attempt: 2 },
-      } }),
-      eligibleJob({ aoi_wkt: 'POLYGON ((85 28, 86 28, 86 29, 85 28))' }),
-      eligibleJob({ start_date: '2026-07-21' }),
-      eligibleJob({ result_summary: { scientific_status: 'PASS', validation: { status: 'PASS' }, provenance: { aoi_sha256: '0'.repeat(64), github_run_id: LANGTANG_DATASET.sourceRunId } } }),
-      eligibleJob({ result_summary: { scientific_status: 'NOT_MEASURABLE', validation: { status: 'PASS' }, provenance: { aoi_sha256: LANGTANG_DATASET.aoiSha256, github_run_id: LANGTANG_DATASET.sourceRunId } } }),
       eligibleJob({ id: 'not-a-job-id' }),
+      eligibleJob({ result_summary: { scientific_status: 'FAIL', validation: { status: 'PASS' }, provenance: { aoi_sha256: 'a'.repeat(64), github_run_id: '987654321' } } }),
+      eligibleJob({ result_summary: { scientific_status: 'PASS', validation: { status: 'PASS' }, provenance: { aoi_sha256: 'bad', github_run_id: '987654321' } } }),
+      eligibleJob({ result_summary: { scientific_status: 'PASS', validation: { status: 'PASS' }, provenance: { aoi_sha256: 'a'.repeat(64), github_run_id: 'wrong' }, artifacts: [{ path: 'aoi-derived-results.zip', kind: 'aoi_derived_result_bundle', bytes: 1, sha256: 'b'.repeat(64) }] } }),
+      eligibleJob({ result_summary: { scientific_status: 'PASS', validation: { status: 'PASS' }, provenance: { aoi_sha256: 'a'.repeat(64), github_run_id: '987654321' }, artifacts: [] } }),
     ];
     for (const job of cases) expect(visualizationForJob(job).available).toBe(false);
   });
 
-  it('allows the verified result context with the general feature flag off and rejects forged queries', () => {
-    const availability = visualizationForJob(eligibleJob());
-    if (!availability.available) throw new Error(availability.reason);
-    const search = new URL(availability.href, 'https://example.test').search;
-    const context = resolveLangtangRouteContext(search);
+  it('preserves the exact legacy Langtang context for the optional static demo', () => {
+    const query = new URLSearchParams({
+      dataset: LANGTANG_DATASET.datasetId,
+      run: LANGTANG_DATASET.sourceRunVersion,
+      job: JOB_ID,
+      return: LANDSLIDE_DISPLACEMENT_PATH,
+    });
+    const context = resolveLangtangRouteContext(`?${query.toString()}`);
+    expect(context).toEqual({
+      mode: 'static-langtang',
+      jobId: JOB_ID,
+      manifestPath: LANGTANG_DATASET.manifestPath,
+      returnPath: LANDSLIDE_DISPLACEMENT_PATH,
+      sourceRunVersion: LANGTANG_DATASET.sourceRunVersion,
+    });
     expect(canOpenLangtangExplorer(false, context)).toBe(true);
-    expect(canOpenLangtangExplorer(true, null)).toBe(true);
     expect(canOpenLangtangExplorer(false, null)).toBe(false);
-    const forged = new URLSearchParams(search);
-    forged.set('run', 'wrong');
-    expect(resolveLangtangRouteContext(`?${forged.toString()}`)).toBeNull();
-    expect(resolveLangtangRouteContext('?dataset=langtang-40212069747-1&run=40212069747-1&job=../../x&return=/landslide/displacements')).toBeNull();
+  });
+
+  it('rejects forged job routes', () => {
+    expect(resolveLangtangRouteContext('?mode=job&job=../../x&return=/landslide/displacements')).toBeNull();
+    expect(resolveLangtangRouteContext(`?mode=job&job=${JOB_ID}&return=https://evil.example`)).toBeNull();
   });
 });

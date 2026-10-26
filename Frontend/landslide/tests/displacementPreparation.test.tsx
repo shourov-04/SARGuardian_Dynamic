@@ -94,7 +94,7 @@ describe('displacement preparation route', () => {
 
   it('shows only one Drive-folder download action after successful processing', () => {
     const succeededJob = {
-      id: 'succeeded-job', state: 'succeeded', stage: 'completed',
+      id: 'ca0e38be-047d-4f14-bcc7-3d64d552327d', state: 'succeeded', stage: 'completed',
       aoi_wkt: 'POLYGON((85 27, 85.01 27, 85 27.01, 85 27))',
       start_date: '2026-09-27', end_date: '2026-10-24',
       created_at: '2026-10-24T10:00:00Z', updated_at: '2026-10-24T10:10:00Z',
@@ -142,7 +142,7 @@ describe('displacement preparation route', () => {
     expect(html).not.toContain('GitHub run');
   });
 
-  it('keeps Download results and links the exact verified Langtang run beside it', () => {
+  it('keeps Download results and links each verified task result beside it', () => {
     const succeededJob = {
       id: '7f3501a3-9d5c-4ff1-8f1c-6b99f90130f1', state: 'succeeded', stage: 'completed',
       aoi_wkt: 'POLYGON ((85.463902000000004 28.357602, 85.378759000000002 28.208853000000001, 85.610157999999998 28.184949, 85.670584000000005 28.305019000000001, 85.463902000000004 28.357602))',
@@ -152,6 +152,8 @@ describe('displacement preparation route', () => {
         scientific_status: 'PASS', validation: { status: 'PASS' },
         storage_verification: { status: 'PASS', remote_folder_id: 'private-drive-folder-40212069747' },
         provenance: { aoi_sha256: '51ba8ae3dd6ddd5050fdc8fdd63799fb378eb3fb10acba70e8e144cc04d957e2', github_run_id: '40212069747' },
+        artifacts: [{ path: 'aoi-derived-results.zip', kind: 'aoi_derived_result_bundle', bytes: 12345,
+          sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', drive_file_id: 'private-file-id-123' }],
       },
     } as const;
 
@@ -160,8 +162,7 @@ describe('displacement preparation route', () => {
     expect(html.match(/Download results/g)).toHaveLength(1);
     expect(html.match(/View Displaced Images/g)).toHaveLength(1);
     expect(html).toContain('href="/landslide/langtang?');
-    expect(html).toContain('dataset=langtang-40212069747-1');
-    expect(html).toContain('run=40212069747-1');
+    expect(html).toContain('mode=job');
     expect(html).toContain('job=7f3501a3-9d5c-4ff1-8f1c-6b99f90130f1');
     expect(html).toContain('return=%2Flandslide%2Fdisplacements');
     expect(html).not.toContain('Visualization is not available');
