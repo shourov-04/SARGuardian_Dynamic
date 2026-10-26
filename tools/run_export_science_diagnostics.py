@@ -55,7 +55,7 @@ def export_identity(path: Path) -> tuple[str, str, str] | None:
 
 
 def collect_pr_gunw_exports(exports_root: Path, target_dir: Path) -> dict[str, Any]:
-    """Flatten PR GUNW exports so pixel_stack's non-recursive input scan sees them."""
+    """Stage PR GUNW exports without collapsing equal basenames across products."""
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -67,15 +67,18 @@ def collect_pr_gunw_exports(exports_root: Path, target_dir: Path) -> dict[str, A
 
     copied: list[str] = []
     collisions: list[dict[str, str]] = []
+    basenames: dict[str, list[str]] = {}
     for source in candidates:
-        target = target_dir / source.name
+        relative = source.relative_to(exports_root)
+        target = target_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
-            # Two distinct source products must never be allowed to overwrite one another.
             if file_sha256(source) != file_sha256(target):
-                collisions.append({"name": source.name, "source": str(source)})
+                collisions.append({"path": relative.as_posix(), "source": str(source)})
             continue
         shutil.copy2(source, target)
-        copied.append(target.name)
+        copied.append(relative.as_posix())
+        basenames.setdefault(source.name, []).append(relative.as_posix())
     return {
         "source_root": str(exports_root),
         "input_directory": str(target_dir),
@@ -83,6 +86,10 @@ def collect_pr_gunw_exports(exports_root: Path, target_dir: Path) -> dict[str, A
         "files_copied": len(copied),
         "files": copied,
         "filename_collisions": collisions,
+        "duplicate_basenames_preserved": [
+            {"name": name, "paths": paths}
+            for name, paths in sorted(basenames.items()) if len(paths) > 1
+        ],
     }
 
 
@@ -149,7 +156,7 @@ def target_window_measurements(
 
     measurements: list[dict[str, Any]] = []
     transformers: dict[str, Any] = {}
-    for path in sorted(raster_dir.glob("GUNW_*.tif")):
+    for path in sorted(raster_dir.rglob("GUNW_*.tif")):
         identity = export_identity(path)
         if not identity or identity[2] != "PR":
             continue
@@ -267,6 +274,7 @@ def run_diagnostics(
         })
 
     pixel_script = science_root / "src" / "pixel_stack.py"
+    pixel_adapter = Path(__file__).resolve().with_name("run_pixel_stack_inventory.py")
     if not pixel_script.is_file():
         report["pixel_stack"] = {"status": "FAIL", "problem": "SCRIPT_MISSING"}
         report["errors"].append({"problem": "PIXEL_STACK_SCRIPT_MISSING"})
@@ -277,9 +285,19 @@ def run_diagnostics(
             "detail": "No matching PR GUNW GeoTIFF exports were retained.",
         }
         report["warnings"].append("PIXEL_STACK_NOT_RUN_NO_GUNW_EXPORTS")
+    elif not pixel_adapter.is_file():
+        report["pixel_stack"] = {"status": "FAIL", "problem": "INVENTORY_ADAPTER_MISSING"}
+        report["errors"].append({"problem": "PIXEL_STACK_INVENTORY_ADAPTER_MISSING"})
     else:
+        inventory_path = out_root / "pixel-stack-inventory.json"
+        inventory_path.write_text(json.dumps({
+            "files": [str((flat_dir / relative).resolve()) for relative in inventory["files"]],
+        }, indent=2) + "\n", encoding="utf-8")
         argv = [
-            sys.executable, str(pixel_script), "--dir", str(flat_dir), "--season", "all",
+            sys.executable, str(pixel_adapter),
+            "--science-root", str(science_root),
+            "--inventory", str(inventory_path),
+            "--season", "all",
         ]
         done = subprocess.run(
             argv, cwd=science_root, text=True, stdout=subprocess.PIPE,

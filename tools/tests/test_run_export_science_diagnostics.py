@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import csv
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 from tools.run_export_science_diagnostics import (
     candidate_export_mask_policy,
     classify_pixel_stack,
+    collect_pr_gunw_exports,
     export_identity,
     help_has_exact_option,
     read_candidate_points,
+    run_diagnostics,
     write_target_log,
 )
+from tools.run_pixel_stack_inventory import run_inventory
 
 
 def test_export_identity_extracts_dates_and_processing_type():
@@ -21,6 +26,101 @@ def test_export_identity_extracts_dates_and_processing_type():
         "20251128", "20251210", "UR"
     )
     assert export_identity(Path("not-a-science-export.tif")) is None
+
+
+def test_duplicate_export_basenames_are_preserved_in_product_subdirectories(tmp_path: Path):
+    exports = tmp_path / "product-data"
+    filename = "GUNW_20260922_20261004_PR.tif"
+    first = exports / "GUNW-001" / filename
+    second = exports / "GUNW-002" / filename
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_bytes(b"ascending-geometry")
+    second.write_bytes(b"descending-geometry")
+
+    inventory = collect_pr_gunw_exports(exports, tmp_path / "staged")
+
+    assert inventory["source_files_matched"] == 2
+    assert inventory["files_copied"] == 2
+    assert inventory["filename_collisions"] == []
+    assert inventory["files"] == [
+        f"GUNW-001/{filename}", f"GUNW-002/{filename}",
+    ]
+    assert inventory["duplicate_basenames_preserved"] == [{
+        "name": filename,
+        "paths": [f"GUNW-001/{filename}", f"GUNW-002/{filename}"],
+    }]
+
+
+def test_pixel_stack_adapter_passes_every_distinct_path_to_pinned_engine(tmp_path: Path):
+    filename = "GUNW_20260922_20261004_PR.tif"
+    files = [tmp_path / "GUNW-001" / filename, tmp_path / "GUNW-002" / filename]
+    for index, path in enumerate(files):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(str(index).encode())
+    parsed: list[Path] = []
+    cross_checks: list[dict] = []
+
+    def parse_export(path: Path):
+        parsed.append(path)
+        return {"path": path, "proc": "PR", "ref": SimpleNamespace(month=9), "geom": path.parent.name}
+
+    engine = SimpleNamespace(
+        parse_export=parse_export,
+        chain=lambda rasters: [rasters],
+        stack=lambda run, remove_common_mode: {"run": run},
+        report=lambda _result, _label: False,
+        cluster_footprint=lambda _result: None,
+        cross_geometry_check=lambda found: cross_checks.append(found),
+    )
+
+    assert run_inventory(engine, files, "all") == 0
+    assert parsed == sorted(files)
+    assert cross_checks == [{}]
+
+
+def test_diagnostics_accept_duplicate_basenames_without_dropping_inputs(monkeypatch, tmp_path: Path):
+    commit = "1" * 40
+    science = tmp_path / "science"
+    science_src = science / "src"
+    science_src.mkdir(parents=True)
+    (science_src / "pixel_stack.py").write_text(
+        "from datetime import datetime\n"
+        "def parse_export(path):\n"
+        "    return {'path': path, 'ref': datetime(2026, 9, 22).date(), "
+        "'sec': datetime(2026, 10, 4).date(), 'proc': 'PR', 'geom': path.parent.name}\n"
+        "def chain(rasters): return [rasters]\n"
+        "def stack(run, remove_common_mode=True): return {'run': run}\n"
+        "def report(result, label): print('VERDICT: NO DETECTION'); return False\n"
+        "def cluster_footprint(result): return None\n"
+        "def cross_geometry_check(found): return None\n",
+        encoding="utf-8",
+    )
+    exports = tmp_path / "product-data"
+    filename = "GUNW_20260922_20261004_PR.tif"
+    for product_id, content in (("GUNW-001", b"a"), ("GUNW-002", b"b")):
+        path = exports / product_id / filename
+        path.parent.mkdir(parents=True)
+        path.write_bytes(content)
+
+    real_run = subprocess.run
+
+    def run(command, *args, **kwargs):
+        if command[:4] == ["git", "-C", str(science.resolve()), "rev-parse"]:
+            return subprocess.CompletedProcess(command, 0, stdout=commit + "\n")
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr("tools.run_export_science_diagnostics.subprocess.run", run)
+    report = run_diagnostics(
+        science, exports, tmp_path / "diagnostics",
+        expected_science_commit=commit,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["pixel_stack"]["status"] == "COMPLETED_NO_DETECTION"
+    assert report["pixel_stack"]["input_count"] == 2
+    assert report["export_inventory"]["files_copied"] == 2
+    assert report["export_inventory"]["filename_collisions"] == []
 
 
 def test_candidate_checker_option_detection_does_not_confuse_aoi_csv_with_aoi():
