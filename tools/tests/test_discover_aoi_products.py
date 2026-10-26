@@ -375,3 +375,9 @@ def test_cli_summary_uses_current_pair_count_schema(tmp_path, monkeypatch, capsy
     github_output = output_file.read_text(encoding="utf-8")
     assert "product_count=1" in github_output
     assert 'shard_matrix={"include":[{"shard_index":0,"shard_count":1,"shard_number":1}]}' in github_output
+
+
+def test_processing_shards_cap_each_runner_at_three_products() -> None:
+    assert [discovery.processing_shard_count(count) for count in (1, 3, 4, 15, 16, 30, 31)] == [
+        1, 1, 2, 5, 6, 10, 11,
+    ]

@@ -224,7 +224,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 10
       matrix: ${{ fromJSON(needs.manifest.outputs.shard_matrix) }}
     # Each runner prepares dependencies once, then streams its balanced shard
     # one product at a time below GitHub's six-hour job ceiling.

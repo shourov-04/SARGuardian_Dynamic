@@ -148,13 +148,13 @@ def test_ten_products_are_balanced_two_per_five_shards() -> None:
     assert len({row["id"] for shard in shards for row in shard}) == 10
 
 
-def test_product_shard_rejects_more_than_five_runners() -> None:
+def test_product_shard_rejects_unbounded_runner_count() -> None:
     try:
-        batch.product_shard([{"id": "GOFF-001"}], 0, 6)
+        batch.product_shard([{"id": "GOFF-001"}], 0, 101)
     except ValueError as error:
         assert "invalid" in str(error)
     else:
-        raise AssertionError("more than five processing shards were accepted")
+        raise AssertionError("an unbounded processing shard count was accepted")
 
 
 def test_sharded_batch_processes_and_validates_only_its_assigned_products(monkeypatch, tmp_path: Path) -> None:
@@ -209,3 +209,15 @@ def test_thirteen_mixed_size_products_do_not_cluster_large_tail_products() -> No
     assert [len(shard) for shard in shards] == [3, 3, 3, 2, 2]
     assert all(sum(row["id"].startswith("GUNW") for row in shard) <= 2 for shard in shards)
     assert [row["id"] for row in shards[4]] == ["GOFF-005", "GUNW-010"]
+
+
+def test_thirty_products_are_limited_to_three_per_runner() -> None:
+    products = [
+        {"id": f"GUNW-{index:03d}", "expected_source_bytes": 2_300_000_000}
+        for index in range(1, 31)
+    ]
+
+    shards = [batch.product_shard(products, index, 10) for index in range(10)]
+
+    assert [len(shard) for shard in shards] == [3] * 10
+    assert len({row["id"] for shard in shards for row in shard}) == 30

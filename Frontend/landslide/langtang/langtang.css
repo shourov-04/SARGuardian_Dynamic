@@ -68,8 +68,8 @@
 .langtang-pair-note { margin: 8px 0 0; padding: 9px; border-left: 3px solid #ffd37a; background: rgba(255, 211, 122, .08); }
 .langtang-legend { margin-top: 18px; display: grid; gap: 7px; }
 .langtang-legend > div { height: 13px; border: 1px solid rgba(255,255,255,.35); border-radius: 3px; }
-.langtang-legend .offset { background: linear-gradient(90deg, #225ba8, #f6f8f2 50%, #b9303d); }
-.langtang-legend .correlation { background: linear-gradient(90deg, #2c144c, #f4e25c); }
+.langtang-legend .offset { background: linear-gradient(90deg, #1b6ccd, #cdd6db 50%, #780c2a); }
+.langtang-legend .correlation { background: linear-gradient(90deg, #291552, #ffe015); }
 .langtang-legend span { color: #f0fbff; font-size: 11px; }
 .langtang-legend small { color: #9fc2d2; font-size: 10px; line-height: 1.45; }
 .langtang-provenance { margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(151,219,255,.2); }

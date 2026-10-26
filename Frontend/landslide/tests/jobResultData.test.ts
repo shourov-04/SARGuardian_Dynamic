@@ -3,6 +3,7 @@ import { writeArrayBuffer } from 'geotiff';
 import { describe, expect, it } from 'vitest';
 import type { DisplacementJob } from '../../src/api/catalog';
 import {
+  colorForJobValue,
   parseAoiPolygon,
   parseJobResultPackage,
   sampleJobMeasurement,
@@ -84,5 +85,26 @@ describe('task result raster package', () => {
   it('parses finite polygon coordinates and rejects unsupported WKT', () => {
     expect(parseAoiPolygon(job().aoi_wkt)).toHaveLength(5);
     expect(() => parseAoiPolygon('POINT (85 29)')).toThrow('not a supported polygon');
+  });
+
+  it('uses high-contrast display colors while preserving zero and no-data distinction', () => {
+    const band = {
+      sourceBand: 1,
+      key: 'displacement' as const,
+      label: 'LOS displacement',
+      unit: 'mm' as const,
+      values: new Float32Array(),
+      displayRange: [-100, 100] as [number, number],
+    };
+
+    expect(colorForJobValue(Number.NaN, band)).toEqual([0, 0, 0, 0]);
+    expect(colorForJobValue(0, band)[3]).toBeGreaterThan(0);
+    const subtlePositive = colorForJobValue(5, band);
+    expect(subtlePositive[0]).toBeGreaterThan(subtlePositive[1]);
+    expect(subtlePositive[0]).toBeGreaterThan(subtlePositive[2]);
+    expect(subtlePositive[3]).toBeGreaterThanOrEqual(220);
+    const strongPositive = colorForJobValue(100, band);
+    expect(strongPositive[0]).toBeGreaterThan(strongPositive[1] * 5);
+    expect(strongPositive[0]).toBeGreaterThan(strongPositive[2] * 2);
   });
 });

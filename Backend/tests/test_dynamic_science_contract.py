@@ -102,7 +102,7 @@ def test_account_workflow_calls_the_upstream_dynamic_aoi_streaming_pipeline() ->
     assert "python tools/discover_aoi_products.py" in dashboard
     assert "python -u tools/run_aoi_streaming_batch.py" in dashboard
     assert "uses: ./.github/workflows/sarguardian-aoi-product-worker.yml" not in dashboard
-    assert "max-parallel: 5" in dashboard
+    assert "max-parallel: 10" in dashboard
     assert "--shard-index" in dashboard
     assert "--shard-count" in dashboard
     assert "pattern: sarguardian-stream-products-*" in dashboard

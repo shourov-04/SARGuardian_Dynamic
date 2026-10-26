@@ -259,19 +259,31 @@ export async function parseJobResultPackage(blob: Blob, job: DisplacementJob): P
   };
 }
 
-function color(value: number, band: JobRasterBand): [number, number, number, number] {
+export function colorForJobValue(value: number, band: JobRasterBand): [number, number, number, number] {
   if (!Number.isFinite(value)) return [0, 0, 0, 0];
   if (band.unit === 'unitless') {
     const t = Math.max(0, Math.min(1, value));
-    return [Math.round(44 + 200 * t), Math.round(20 + 206 * t), Math.round(76 - 16 * t), 220];
+    const strength = Math.pow(t, 0.55);
+    return [Math.round(41 + 214 * strength), Math.round(21 + 203 * strength), Math.round(82 - 61 * strength), 238];
   }
   const clip = Math.max(Math.abs(band.displayRange[0]), Math.abs(band.displayRange[1]), 1e-6);
   const t = Math.max(-1, Math.min(1, value / clip));
+  if (t === 0) return [205, 214, 219, 175];
+  const strength = Math.pow(Math.abs(t), 0.42);
   if (t < 0) {
-    const mix = t + 1;
-    return [Math.round(34 + 212 * mix), Math.round(91 + 157 * mix), Math.round(168 + 74 * mix), 220];
+    return [
+      Math.round(201 - 174 * strength),
+      Math.round(215 - 107 * strength),
+      Math.round(225 - 20 * strength),
+      Math.round(210 + 38 * strength),
+    ];
   }
-  return [Math.round(246 - 61 * t), Math.round(248 - 200 * t), Math.round(242 - 181 * t), 220];
+  return [
+    Math.round(232 - 112 * strength),
+    Math.round(202 - 190 * strength),
+    Math.round(199 - 157 * strength),
+    Math.round(214 + 34 * strength),
+  ];
 }
 
 function mercatorY(latitude: number): number {
@@ -303,7 +315,7 @@ export function renderJobOverlay(product: JobRasterProduct, band: JobRasterBand)
       const sourceRow = Math.floor((maxY - y) / (maxY - minY) * product.height);
       const output = (row * product.width + column) * 4;
       const rgba = sourceColumn >= 0 && sourceRow >= 0 && sourceColumn < product.width && sourceRow < product.height
-        ? color(Number(band.values[sourceRow * product.width + sourceColumn]), band)
+        ? colorForJobValue(Number(band.values[sourceRow * product.width + sourceColumn]), band)
         : [0, 0, 0, 0];
       pixels.data.set(rgba, output);
     }

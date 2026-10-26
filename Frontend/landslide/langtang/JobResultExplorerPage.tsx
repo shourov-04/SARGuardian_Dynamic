@@ -20,6 +20,22 @@ type Props = {
   onSignOut: () => void;
 };
 
+const TASK_RESULT_DARK_MAP_STYLES: google.maps.MapTypeStyle[] = [
+  { elementType: 'geometry', stylers: [{ color: '#18252d' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#18252d' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#b9c7cc' }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#52636b' }] },
+  { featureType: 'administrative.country', elementType: 'labels.text.fill', stylers: [{ color: '#d6e0e3' }] },
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#203038' }] },
+  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#253a3c' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#90aaa4' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#384b52' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#aebdc2' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2b3c43' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0b202c' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#7296a3' }] },
+];
+
 function formatValue(value: number, unit: string): string {
   return `${value.toFixed(unit === 'mm' ? 3 : 5)} ${unit}`;
 }
@@ -38,7 +54,7 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
   const [mapReady, setMapReady] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedBandKey, setSelectedBandKey] = useState('');
-  const [opacity, setOpacity] = useState(72);
+  const [opacity, setOpacity] = useState(88);
   const [measurement, setMeasurement] = useState<JobPixelMeasurement | null>(null);
   const [rendering, setRendering] = useState(false);
 
@@ -81,6 +97,8 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
         minZoom: 2,
         maxZoom: 19,
         mapTypeId: 'terrain',
+        backgroundColor: '#101b22',
+        styles: TASK_RESULT_DARK_MAP_STYLES,
         clickableIcons: false,
         fullscreenControl: true,
         streetViewControl: false,
@@ -216,7 +234,7 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
         <section className="langtang-legend" aria-label="Map legend">
           <div className={selectedBand?.unit === 'unitless' ? 'correlation' : 'offset'} />
           <span>{legendLabel}</span>
-          <small>Transparent cells contain no measurement. Map colors are display-only; Pixel Inspector reads the decoded scientific raster.</small>
+          <small>Transparent cells contain no measurement. Enhanced contrast affects display colors only; Pixel Inspector reads the decoded scientific raster.</small>
         </section>
 
         <section className="langtang-provenance">

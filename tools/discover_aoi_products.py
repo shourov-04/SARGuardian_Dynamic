@@ -707,6 +707,12 @@ def discover(args: argparse.Namespace) -> dict[str, Any]:
     }
     return manifest
 
+def processing_shard_count(product_count: int) -> int:
+    if product_count < 1:
+        raise ValueError("At least one product is required for processing.")
+    return (product_count + 2) // 3
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--science-root", required=True, type=Path)
@@ -736,7 +742,10 @@ def main() -> int:
         for row in manifest["products"]
     ]
     compact = json.dumps(matrix, separators=(",", ":"))
-    shard_count = min(5, len(matrix))
+    # Prepare dependencies once for each group of at most three products.
+    # Ten concurrent runners cover the 30-product target. Larger inventories
+    # create additional queued shards while preserving the three-product cap.
+    shard_count = processing_shard_count(len(matrix))
     shard_matrix = json.dumps(
         {"include": [
             {"shard_index": index, "shard_count": shard_count, "shard_number": index + 1}
