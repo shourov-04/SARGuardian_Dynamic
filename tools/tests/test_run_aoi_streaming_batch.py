@@ -134,16 +134,16 @@ def test_manifest_rejects_duplicate_product_ids(tmp_path: Path) -> None:
 
 
 def test_ten_products_are_balanced_two_per_five_shards() -> None:
-    products = [{"id": f"GOFF-{index:03d}"} for index in range(1, 11)]
+    products = [{"id": f"GOFF-{index:03d}", "expected_source_bytes": 10} for index in range(1, 11)]
 
     shards = [batch.product_shard(products, index, 5) for index in range(5)]
 
     assert [[row["id"] for row in shard] for shard in shards] == [
-        ["GOFF-001", "GOFF-002"],
-        ["GOFF-003", "GOFF-004"],
-        ["GOFF-005", "GOFF-006"],
-        ["GOFF-007", "GOFF-008"],
-        ["GOFF-009", "GOFF-010"],
+        ["GOFF-001", "GOFF-006"],
+        ["GOFF-002", "GOFF-007"],
+        ["GOFF-003", "GOFF-008"],
+        ["GOFF-004", "GOFF-009"],
+        ["GOFF-005", "GOFF-010"],
     ]
     assert len({row["id"] for shard in shards for row in shard}) == 10
 
@@ -193,3 +193,19 @@ def test_sharded_batch_processes_and_validates_only_its_assigned_products(monkey
     )
     assert summary["shard_index"] == 1
     assert summary["shard_count"] == 2
+
+
+def test_thirteen_mixed_size_products_do_not_cluster_large_tail_products() -> None:
+    products = [
+        {"id": f"GOFF-{index:03d}", "expected_source_bytes": 1_100_000_000}
+        for index in range(1, 6)
+    ] + [
+        {"id": f"GUNW-{index:03d}", "expected_source_bytes": 2_300_000_000}
+        for index in range(6, 14)
+    ]
+
+    shards = [batch.product_shard(products, index, 5) for index in range(5)]
+
+    assert [len(shard) for shard in shards] == [3, 3, 3, 2, 2]
+    assert all(sum(row["id"].startswith("GUNW") for row in shard) <= 2 for shard in shards)
+    assert [row["id"] for row in shards[4]] == ["GOFF-005", "GUNW-010"]

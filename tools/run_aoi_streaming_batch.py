@@ -50,9 +50,17 @@ def load_products(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 def product_shard(products: list[dict[str, Any]], shard_index: int, shard_count: int) -> list[dict[str, Any]]:
     if shard_count < 1 or shard_count > 5 or shard_index < 0 or shard_index >= shard_count:
         raise ValueError("Product shard selection is invalid.")
-    start = len(products) * shard_index // shard_count
-    stop = len(products) * (shard_index + 1) // shard_count
-    selected = products[start:stop]
+    base, extra = divmod(len(products), shard_count)
+    capacities = [base + (1 if index < extra else 0) for index in range(shard_count)]
+    shards: list[list[dict[str, Any]]] = [[] for _ in range(shard_count)]
+    expected_bytes = [0] * shard_count
+    for product in products:
+        candidates = [index for index in range(shard_count) if len(shards[index]) < capacities[index]]
+        target = min(candidates, key=lambda index: (expected_bytes[index], len(shards[index]), index))
+        shards[target].append(product)
+        size = product.get("expected_source_bytes", 1)
+        expected_bytes[target] += max(1, size if isinstance(size, int) and not isinstance(size, bool) else 1)
+    selected = shards[shard_index]
     if not selected:
         raise ValueError("Product shard is empty.")
     return selected
@@ -98,6 +106,12 @@ def main() -> int:
     products = product_shard(all_products, args.shard_index, args.shard_count)
     shard_manifest = dict(manifest)
     shard_manifest["products"] = products
+    shard_expected_bytes = sum(int(product["expected_source_bytes"]) for product in products)
+    print(
+        f"BATCH_SHARD_ASSIGNMENT shard={args.shard_index + 1}/{args.shard_count} "
+        f"products={len(products)} expected_source_bytes={shard_expected_bytes}",
+        flush=True,
+    )
     args.work_root.mkdir(parents=True, exist_ok=True)
     (args.checkpoint_root / "products").mkdir(parents=True, exist_ok=True)
     (args.checkpoint_root / "cleanups").mkdir(parents=True, exist_ok=True)
