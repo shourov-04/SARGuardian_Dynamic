@@ -2,16 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import { configureGoogleMaps, importLibrary } from '../../src/googleMaps';
 import { findBand, LANGTANG_MANIFEST_PATH, loadLangtangManifest, NumericRasterCache, resolveAssetUrl, sampleMeasurement } from './data';
+import { LANGTANG_DATASET } from './contract';
 import type { LangtangBandKey, LangtangManifest, PixelMeasurement } from './types';
 import './langtang.css';
-
-const EXPECTED_AOI: Array<[number, number]> = [
-  [85.463902, 28.357602],
-  [85.378759, 28.208853],
-  [85.610158, 28.184949],
-  [85.670584, 28.305019],
-  [85.463902, 28.357602],
-];
 
 const BAND_OPTIONS: Array<{ key: LangtangBandKey; label: string; unit: string }> = [
   { key: 'slant_range_offset', label: 'Slant-range offset', unit: 'mm' },
@@ -25,6 +18,8 @@ type Props = {
   onHome: () => void;
   onBack: () => void;
   onSignOut: () => void;
+  manifestPath?: string;
+  backLabel?: string;
 };
 
 function formatValue(value: number, unit: string): string {
@@ -32,7 +27,7 @@ function formatValue(value: number, unit: string): string {
   return `${value.toFixed(digits)} ${unit}`;
 }
 
-export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut }: Props) {
+export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut, manifestPath = LANGTANG_MANIFEST_PATH, backLabel = 'Displacement map' }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const imageOverlay = useRef<google.maps.GroundOverlay | null>(null);
@@ -56,7 +51,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut 
   useEffect(() => {
     if (!enabled) return undefined;
     let active = true;
-    void loadLangtangManifest().then((loaded) => {
+    void loadLangtangManifest(manifestPath).then((loaded) => {
       if (active) {
         setManifest(loaded);
         setManifestError('');
@@ -65,7 +60,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut 
       if (active) setManifestError(error instanceof Error ? error.message : 'Verified Langtang raster assets are unavailable.');
     });
     return () => { active = false; };
-  }, [enabled]);
+  }, [enabled, manifestPath]);
 
   useEffect(() => {
     if (!enabled || !mapContainer.current) return undefined;
@@ -90,7 +85,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut 
       });
       new google.maps.Polygon({
         map,
-        paths: EXPECTED_AOI.map(([lng, lat]) => ({ lng, lat })),
+        paths: LANGTANG_DATASET.aoiCoordinates.map(([lng, lat]) => ({ lng, lat })),
         strokeColor: '#56f1de',
         strokeOpacity: 1,
         strokeWeight: 2.5,
@@ -126,7 +121,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut 
     if (!mapReady || !map || !selectedProduct || !selectedBandDefinition) return;
     const [west, south, east, north] = selectedBandDefinition.preview.bounds_wgs84;
     imageOverlay.current = new google.maps.GroundOverlay(
-      resolveAssetUrl(LANGTANG_MANIFEST_PATH, selectedBandDefinition.preview.url),
+      resolveAssetUrl(manifestPath, selectedBandDefinition.preview.url),
       { west, south, east, north },
       { map, opacity: opacity / 100, clickable: false },
     );
@@ -145,7 +140,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut 
       imageOverlay.current?.setMap(null);
       footprintOverlay.current?.setMap(null);
     };
-  }, [mapReady, opacity, selectedBandDefinition, selectedProduct]);
+  }, [manifestPath, mapReady, opacity, selectedBandDefinition, selectedProduct]);
 
   clickHandler.current = (longitude, latitude) => {
     if (!selectedProduct) return;
@@ -156,7 +151,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut 
       selectedBand,
       longitude,
       latitude,
-      LANGTANG_MANIFEST_PATH,
+      manifestPath,
       rasterCache,
     ).then(setMeasurement).catch((error: unknown) => {
       setMeasurement(null);
@@ -189,7 +184,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut 
   return <div className="langtang-page">
     <header className="langtang-header">
       <button type="button" className="langtang-brand" onClick={onHome}>SARGuardian <span>Earth in sight</span></button>
-      <div><span>{user.displayName || user.email || 'Signed-in researcher'}</span><button type="button" onClick={onBack}>Displacement map</button><button type="button" onClick={onSignOut}>Sign out</button></div>
+      <div><span>{user.displayName || user.email || 'Signed-in researcher'}</span><button type="button" onClick={onBack}>{backLabel}</button><button type="button" onClick={onSignOut}>Sign out</button></div>
     </header>
     <main className="langtang-layout">
       <aside className="langtang-panel" aria-label="Observation controls">

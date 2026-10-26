@@ -104,6 +104,9 @@
 .landslide-route-shell .map-search > button,
 .landslide-route-shell .investigate-button { min-height: 40px; padding: 0 15px; border: 1px solid #6eede4; border-radius: 9px; background: linear-gradient(150deg, #72e9dc, #2cbbcf); color: #062c3b; box-shadow: 0 4px 14px rgba(16, 162, 176, .12); font-size: 12px; }
 .landslide-route-shell .validated-output-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.landslide-route-shell .scientific-result-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+.landslide-route-shell .visualization-unavailable { display: grid; gap: 5px; max-width: 300px; }
+.landslide-route-shell .visualization-unavailable small { color: var(--sg-muted); font-size: 11px; line-height: 1.45; }
 .landslide-route-shell .investigate-button:hover:not(:disabled),
 .landslide-route-shell .map-search > button:hover:not(:disabled) { background: #9cf4e6; }
 .landslide-route-shell button:disabled { cursor: not-allowed; opacity: .5; }
@@ -279,6 +282,10 @@
   .landslide-route-shell .displacement-resubmit-actions button { width: 100%; }
   .landslide-route-shell .displacement-task-actions { align-items: stretch; flex-direction: column; }
   .landslide-route-shell .displacement-task-actions button { width: 100%; }
+  .landslide-route-shell .scientific-result-actions { align-items: stretch; flex-direction: column; }
+  .landslide-route-shell .scientific-result-actions > *,
+  .landslide-route-shell .visualization-unavailable,
+  .landslide-route-shell .visualization-unavailable > * { width: 100%; max-width: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .landslide-route-shell button { transition: none; }

@@ -1,7 +1,8 @@
 import proj4 from 'proj4';
 import type { LangtangBand, LangtangBandKey, LangtangManifest, LangtangProduct, PixelMeasurement } from './types';
+import { LANGTANG_DATASET, LANGTANG_MANIFEST_PATH } from './contract';
 
-export const LANGTANG_MANIFEST_PATH = '/data/nisar/langtang/40212069747-1/manifest.json';
+export { LANGTANG_MANIFEST_PATH } from './contract';
 export const LANGTANG_SCHEMA = 'sarguardian-langtang-web-data/1.0';
 
 const EXPECTED_PRODUCT_CONTRACT = {
@@ -21,7 +22,7 @@ const EXPECTED_BANDS = new Set<LangtangBandKey>(['slant_range_offset', 'along_tr
 const SHA256 = /^[a-f0-9]{64}$/;
 const EXPECTED_TRANSFORM = [80, 0, 340720, 0, -80, 3138000];
 const EXPECTED_BOUNDS = [340720, 3118240, 369840, 3138000];
-const EXPECTED_AOI_WKT = 'POLYGON ((85.463902 28.357602, 85.378759 28.208853, 85.610158 28.184949, 85.670584 28.305019, 85.463902 28.357602))';
+const EXPECTED_AOI_WKT = LANGTANG_DATASET.aoiWkt;
 
 const browserFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
@@ -41,12 +42,12 @@ function isRelativeAssetPath(value: unknown): value is string {
 export function parseLangtangManifest(value: unknown): LangtangManifest {
   if (!value || typeof value !== 'object') throw new Error('Langtang data manifest is not an object.');
   const manifest = value as Partial<LangtangManifest>;
-  if (manifest.schema_version !== LANGTANG_SCHEMA || manifest.dataset_id !== 'langtang-40212069747-1') {
+  if (manifest.schema_version !== LANGTANG_SCHEMA || manifest.dataset_id !== LANGTANG_DATASET.datasetId) {
     throw new Error('Langtang data manifest schema is unsupported.');
   }
   if (
-    manifest.source_run_id !== '40212069747'
-    || manifest.source_run_attempt !== 1
+    manifest.source_run_id !== LANGTANG_DATASET.sourceRunId
+    || manifest.source_run_attempt !== LANGTANG_DATASET.sourceRunAttempt
     || manifest.processing_status !== 'PASS'
     || manifest.science_status !== 'PASS_WITH_LIMITATIONS'
     || manifest.maturity !== 'PROVISIONAL'
@@ -132,7 +133,7 @@ export function parseLangtangManifest(value: unknown): LangtangManifest {
 }
 
 export async function loadLangtangManifest(
-  manifestPath = LANGTANG_MANIFEST_PATH,
+  manifestPath: string = LANGTANG_MANIFEST_PATH,
   fetcher: typeof fetch = browserFetch,
 ): Promise<LangtangManifest> {
   const response = await fetcher(manifestPath, { headers: { Accept: 'application/json' } });

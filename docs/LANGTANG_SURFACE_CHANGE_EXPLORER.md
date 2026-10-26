@@ -50,7 +50,10 @@ VITE_LANGTANG_EXPLORER_ENABLED=true
 From `Frontend/`, run `npm ci` and `npm run dev`, sign in, and open
 `http://localhost:5173/landslide/langtang`. The route uses the existing Google
 Maps browser key and Firebase authentication. With the flag off, existing users
-see no new investigation card and direct navigation shows a closed state.
+see no new investigation card and an unscoped direct visit shows a closed state.
+A completed result is allowed to open the viewer only when its signed-in job
+context matches the verified run, AOI hash and geometry, workflow attempt, and
+date window described below.
 
 The two inputs are provisional D048 GOFF acquisition pairs. The 16–28 August
 pair spans the reported 26 August event; it does not locate a change at one
@@ -59,15 +62,27 @@ not calibrated horizontal or 3D motion. NaN means no measurement, while a
 finite zero is a valid measurement. Correlation is a quality indicator, not a
 probability. The view is historical research output and is not a hazard warning.
 
-## Data publication state
+## Production publication and result entry point
 
 The two TIFFs and run summary were locally verified from the supplied
 `aoi-derived-results.zip`. The exporter reproduced all six native numeric bands
 without changing their values, and ten real source pixels (including NaN cells)
-were checked against Rasterio. Generated web assets remain local verification
-output and are intentionally not committed or published in SG-001. No
-placeholder raster, fabricated measurement, or hard-coded Drive link is used.
-Until the verified static output is placed at
-`Frontend/public/data/nisar/langtang/40212069747-1/` for a local preview or
-published through an approved deployment, the route fails closed with a clear
-asset-unavailable message.
+were checked against Rasterio. Only the generated manifest, PNG previews, and
+native numeric `.f32.bin` bands are published at the stable versioned path
+`Frontend/public/data/nisar/langtang/40212069747-1/`. The source TIFF and HDF5
+files remain excluded.
+
+The successful processing-results view preserves its existing Download results
+action. It adds View Displaced Images beside that action. The link is enabled
+only for run `40212069747`, attempt 1, with the exact verified AOI, AOI digest,
+20 July through 30 August 2026 date window, and PASS result provenance. Its URL
+includes the dataset version, source run version, current account job UUID, and
+a fixed return route to `/landslide/displacements`. Other successful runs show
+a disabled action with an unavailable explanation; pending, running, and failed
+jobs show no result actions.
+
+This release does not generate visualization assets for future runs and does
+not change the GitHub Actions or scientific processing pipeline. Adding new
+eligible datasets requires exporting and publishing another verified,
+versioned manifest contract before its result mapping can be enabled. Missing
+or invalid assets continue to fail closed without placeholder measurements.

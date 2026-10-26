@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import type { Engine } from './data/engineData';
-import { listDisplacementJobs } from './api/catalog';
+import { getDisplacementJob, listDisplacementJobs } from './api/catalog';
 import { Home } from './pages/Home';
 import { LandslidePage } from '../landslide/ui/LandslidePage';
 import { isLangtangExplorerEnabled } from '../landslide/langtang/feature';
+import { canOpenLangtangExplorer, resolveLangtangRouteContext, visualizationForJob } from '../landslide/langtang/availability';
 import { auth, firebaseConfigured, googleProvider, missingFirebaseConfig } from './firebase';
 import { isLandslideDisplacementRoute, isLandslideLangtangRoute, isLandslideResultsRoute, isLandslideRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_LANGTANG_PATH, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
 
@@ -20,6 +21,7 @@ function App() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<string | null>(null);
   const [hasActiveDisplacementTask, setHasActiveDisplacementTask] = useState(false);
+  const [viewerAccess, setViewerAccess] = useState<{ jobId: string; state: 'loading' | 'allowed' | 'denied' } | null>(null);
 
   const navigateTo = useCallback((nextPath: string) => {
     const normalizedPath = navigatePath(nextPath, window.location.pathname, window.history.pushState.bind(window.history));
@@ -56,6 +58,28 @@ function App() {
     const timer = window.setInterval(() => { void refreshDisplacementTaskState(user); }, 5000);
     return () => window.clearInterval(timer);
   }, [refreshDisplacementTaskState, user]);
+
+  useEffect(() => {
+    const context = isLandslideLangtangRoute(pathname)
+      ? resolveLangtangRouteContext(window.location.search)
+      : null;
+    if (!user || !context || isLangtangExplorerEnabled()) {
+      setViewerAccess(null);
+      return undefined;
+    }
+    let active = true;
+    setViewerAccess({ jobId: context.jobId, state: 'loading' });
+    void getDisplacementJob(context.jobId, user).then((job) => {
+      if (!active) return;
+      setViewerAccess({
+        jobId: context.jobId,
+        state: visualizationForJob(job).available ? 'allowed' : 'denied',
+      });
+    }).catch(() => {
+      if (active) setViewerAccess({ jobId: context.jobId, state: 'denied' });
+    });
+    return () => { active = false; };
+  }, [pathname, user]);
 
   useEffect(() => {
     // The account task may continue while the user visits Home. Only the map
@@ -163,12 +187,22 @@ function App() {
     }
 
     if (isLandslideLangtangRoute(pathname)) {
+      const viewerContext = resolveLangtangRouteContext(window.location.search);
+      const flagEnabled = isLangtangExplorerEnabled();
+      const contextVerified = viewerContext !== null
+        && viewerAccess?.jobId === viewerContext.jobId
+        && viewerAccess.state === 'allowed';
+      if (!flagEnabled && viewerContext && (!viewerAccess || viewerAccess.jobId !== viewerContext.jobId || viewerAccess.state === 'loading')) {
+        return <main className="langtang-unavailable" role="status">Verifying processing result…</main>;
+      }
       return <Suspense fallback={<main className="langtang-unavailable" role="status">Loading Langtang explorer…</main>}>
         <LangtangExplorerPage
-          enabled={isLangtangExplorerEnabled()}
+          enabled={canOpenLangtangExplorer(flagEnabled, contextVerified ? viewerContext : null)}
           user={user}
           onHome={() => navigateTo('/')}
-          onBack={() => navigateTo(LANDSLIDE_PATH)}
+          onBack={() => navigateTo(viewerContext?.returnPath ?? LANDSLIDE_PATH)}
+          manifestPath={viewerContext?.manifestPath}
+          backLabel={viewerContext ? 'Processing results' : 'Displacement map'}
           onSignOut={handleSignOut}
         />
       </Suspense>;

@@ -110,6 +110,9 @@ describe('displacement preparation route', () => {
 
     expect(html).toContain('Download results');
     expect(html).toContain('https://drive.google.com/drive/folders/private-drive-folder-123');
+    expect(html).toContain('View Displaced Images');
+    expect(html).toContain('disabled');
+    expect(html).toContain('Visualization is unavailable because this result has no verified scientific provenance.');
     expect(html).not.toContain('Scientific diagnostics');
     expect(html).not.toContain('Input products');
     expect(html).not.toContain('Retained scientific outputs');
@@ -132,8 +135,47 @@ describe('displacement preparation route', () => {
     const html = renderToStaticMarkup(<ScientificResults job={succeededJob as never} user={user} />);
 
     expect(html.match(/Download results/g)).toHaveLength(1);
+    expect(html).toContain('View Displaced Images');
+    expect(html).toContain('disabled');
     expect(html).not.toContain('Scientific diagnostics');
     expect(html).not.toContain('Inputs and processing provenance');
     expect(html).not.toContain('GitHub run');
+  });
+
+  it('keeps Download results and links the exact verified Langtang run beside it', () => {
+    const succeededJob = {
+      id: '7f3501a3-9d5c-4ff1-8f1c-6b99f90130f1', state: 'succeeded', stage: 'completed',
+      aoi_wkt: 'POLYGON ((85.463902000000004 28.357602, 85.378759000000002 28.208853000000001, 85.610157999999998 28.184949, 85.670584000000005 28.305019000000001, 85.463902000000004 28.357602))',
+      start_date: '2026-07-20', end_date: '2026-08-30', github_run_id: '40212069747',
+      created_at: '2026-10-25T16:00:00Z', updated_at: '2026-10-25T17:00:00Z',
+      result_summary: {
+        scientific_status: 'PASS', validation: { status: 'PASS' },
+        storage_verification: { status: 'PASS', remote_folder_id: 'private-drive-folder-40212069747' },
+        provenance: { aoi_sha256: '51ba8ae3dd6ddd5050fdc8fdd63799fb378eb3fb10acba70e8e144cc04d957e2', github_run_id: '40212069747' },
+      },
+    } as const;
+
+    const html = renderToStaticMarkup(<ScientificResults job={succeededJob as never} />);
+
+    expect(html.match(/Download results/g)).toHaveLength(1);
+    expect(html.match(/View Displaced Images/g)).toHaveLength(1);
+    expect(html).toContain('href="/landslide/langtang?');
+    expect(html).toContain('dataset=langtang-40212069747-1');
+    expect(html).toContain('run=40212069747-1');
+    expect(html).toContain('job=7f3501a3-9d5c-4ff1-8f1c-6b99f90130f1');
+    expect(html).toContain('return=%2Flandslide%2Fdisplacements');
+    expect(html).not.toContain('Visualization is not available');
+  });
+
+  it.each(['queued', 'dispatching', 'running', 'failed'] as const)('does not render result actions while a task is %s', (state) => {
+    const job = {
+      id: '7f3501a3-9d5c-4ff1-8f1c-6b99f90130f1', state, stage: state,
+      aoi_wkt: 'POLYGON ((85 27, 85.01 27, 85 27.01, 85 27))',
+      start_date: '2026-09-27', end_date: '2026-10-24',
+      created_at: '2026-10-24T10:00:00Z', updated_at: '2026-10-24T10:01:05Z',
+    } as const;
+    const html = renderToStaticMarkup(<ScientificResults job={job as never} user={user} />);
+    expect(html).not.toContain('Download results');
+    expect(html).not.toContain('View Displaced Images');
   });
 });

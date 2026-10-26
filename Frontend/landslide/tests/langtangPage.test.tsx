@@ -13,8 +13,9 @@ describe('Langtang explorer safety states', () => {
   });
 
   it('labels the historical scientific limitations without inventing measurements', () => {
-    const html = renderToStaticMarkup(<LangtangExplorerPage enabled={true} user={user} onHome={() => {}} onBack={() => {}} onSignOut={() => {}} />);
+    const html = renderToStaticMarkup(<LangtangExplorerPage enabled={true} user={user} onHome={() => {}} onBack={() => {}} backLabel="Processing results" onSignOut={() => {}} />);
     expect(html).toContain('Langtang Surface Change Explorer');
+    expect(html).toContain('Processing results');
     expect(html).toContain('not a calibrated horizontal or 3D displacement vector');
     expect(html).toContain('not a hazard warning');
     expect(html).toContain('no measurement');
