@@ -48,10 +48,11 @@ def load_products(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 
 def product_shard(products: list[dict[str, Any]], shard_index: int, shard_count: int) -> list[dict[str, Any]]:
-    if shard_count < 1 or shard_count > 100 or shard_index < 0 or shard_index >= shard_count:
+    if shard_count < 1 or shard_count > 10 or shard_index < 0 or shard_index >= shard_count:
         raise ValueError("Product shard selection is invalid.")
-    base, extra = divmod(len(products), shard_count)
-    capacities = [base + (1 if index < extra else 0) for index in range(shard_count)]
+    base, remainder = divmod(len(products), shard_count)
+    capacities = [base] * shard_count
+    capacities[-1] += remainder
     shards: list[list[dict[str, Any]]] = [[] for _ in range(shard_count)]
     expected_bytes = [0] * shard_count
     for product in products:

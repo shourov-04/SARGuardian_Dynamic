@@ -710,7 +710,10 @@ def discover(args: argparse.Namespace) -> dict[str, Any]:
 def processing_shard_count(product_count: int) -> int:
     if product_count < 1:
         raise ValueError("At least one product is required for processing.")
-    return (product_count + 2) // 3
+    # Keep setup overhead bounded: use roughly one runner per three products,
+    # but never create more than ten concurrent processing jobs. Any remainder
+    # is handled by the final runner.
+    return min(10, max(1, product_count // 3))
 
 
 def main() -> int:
@@ -742,9 +745,8 @@ def main() -> int:
         for row in manifest["products"]
     ]
     compact = json.dumps(matrix, separators=(",", ":"))
-    # Prepare dependencies once for each group of at most three products.
-    # Ten concurrent runners cover the 30-product target. Larger inventories
-    # create additional queued shards while preserving the three-product cap.
+    # Prepare dependencies once per shard. Up to ten runners execute in
+    # parallel; the final runner absorbs products left after the base split.
     shard_count = processing_shard_count(len(matrix))
     shard_matrix = json.dumps(
         {"include": [

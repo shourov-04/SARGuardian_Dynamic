@@ -23,6 +23,9 @@ export type JobRasterProduct = {
   id: string;
   family: 'GUNW' | 'GOFF';
   sourcePath: string;
+  sourceProductIds: string[];
+  sourceCount: number;
+  aggregation: 'source' | 'pixel_median';
   referenceDate: string;
   secondaryDate: string;
   width: number;
@@ -174,6 +177,104 @@ function wgs84Footprint(projection: string, bounds: [number, number, number, num
   return corners.map(([x, y]) => proj4(projection, 'EPSG:4326', [x, y]) as [number, number]);
 }
 
+function median(values: number[]): number {
+  if (!values.length) return Number.NaN;
+  values.sort((left, right) => left - right);
+  const middle = Math.floor(values.length / 2);
+  return values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+}
+
+function combinedDate(products: JobRasterProduct[], key: 'referenceDate' | 'secondaryDate', latest: boolean): string {
+  const dates = products.map((product) => product[key]).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value));
+  if (!dates.length) return 'Unknown';
+  dates.sort();
+  return dates[latest ? dates.length - 1 : 0];
+}
+
+function sampleNativeBand(product: JobRasterProduct, bandKey: JobBandKey, x: number, y: number, projection: string): number {
+  const [sourceX, sourceY] = projection === product.projection
+    ? [x, y]
+    : proj4(projection, product.projection, [x, y]);
+  const [minX, minY, maxX, maxY] = product.boundsNative;
+  const column = Math.floor((sourceX - minX) / (maxX - minX) * product.width);
+  const row = Math.floor((maxY - sourceY) / (maxY - minY) * product.height);
+  if (column < 0 || row < 0 || column >= product.width || row >= product.height) return Number.NaN;
+  const band = product.bands.find((candidate) => candidate.key === bandKey);
+  return band ? Number(band.values[row * product.width + column]) : Number.NaN;
+}
+
+export function combineJobProducts(products: JobRasterProduct[]): JobRasterProduct[] {
+  const combined: JobRasterProduct[] = [];
+  for (const family of ['GOFF', 'GUNW'] as const) {
+    const sources = products.filter((product) => product.family === family);
+    if (!sources.length) continue;
+    const reference = sources.reduce((largest, product) => (
+      product.width * product.height > largest.width * largest.height ? product : largest
+    ));
+    const projection = reference.projection;
+    const projectedCorners = sources.flatMap((product) => product.footprintWgs84.map(([longitude, latitude]) => (
+      proj4('EPSG:4326', projection, [longitude, latitude]) as [number, number]
+    )));
+    const xValues = projectedCorners.map(([x]) => x);
+    const yValues = projectedCorners.map(([, y]) => y);
+    const boundsNative: [number, number, number, number] = [
+      Math.min(...xValues), Math.min(...yValues), Math.max(...xValues), Math.max(...yValues),
+    ];
+    const referenceResolutionX = (reference.boundsNative[2] - reference.boundsNative[0]) / reference.width;
+    const referenceResolutionY = (reference.boundsNative[3] - reference.boundsNative[1]) / reference.height;
+    const width = Math.max(1, Math.ceil((boundsNative[2] - boundsNative[0]) / referenceResolutionX));
+    const height = Math.max(1, Math.ceil((boundsNative[3] - boundsNative[1]) / referenceResolutionY));
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width * height > 10_000_000) {
+      throw new Error(`${family} combined visualization grid is too large.`);
+    }
+    const expectedBands = reference.bands.map(({ key, label, unit }) => ({ key, label, unit }));
+    if (sources.some((product) => expectedBands.some((band) => !product.bands.some((candidate) => (
+      candidate.key === band.key && candidate.unit === band.unit
+    ))))) {
+      throw new Error(`${family} result rasters do not have a consistent band inventory.`);
+    }
+    const combinedValues = expectedBands.map(() => new Float32Array(width * height).fill(Number.NaN));
+    const [minX, minY, maxX, maxY] = boundsNative;
+    for (let row = 0; row < height; row += 1) {
+      const y = maxY - (row + 0.5) / height * (maxY - minY);
+      for (let column = 0; column < width; column += 1) {
+        const x = minX + (column + 0.5) / width * (maxX - minX);
+        const index = row * width + column;
+        expectedBands.forEach((band, bandIndex) => {
+          const finite = sources
+            .map((product) => sampleNativeBand(product, band.key, x, y, projection))
+            .filter(Number.isFinite);
+          combinedValues[bandIndex][index] = median(finite);
+        });
+      }
+    }
+    const footprintWgs84 = wgs84Footprint(projection, boundsNative);
+    const longitudes = footprintWgs84.map(([longitude]) => longitude);
+    const latitudes = footprintWgs84.map(([, latitude]) => latitude);
+    const sourceProductIds = [...new Set(sources.flatMap((product) => product.sourceProductIds))]
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+    combined.push({
+      id: `${family}-COMBINED`,
+      family,
+      sourcePath: `combined:${sourceProductIds.join(',')}`,
+      sourceProductIds,
+      sourceCount: sourceProductIds.length,
+      aggregation: 'pixel_median',
+      referenceDate: combinedDate(sources, 'referenceDate', false),
+      secondaryDate: combinedDate(sources, 'secondaryDate', true),
+      width,
+      height,
+      epsg: reference.epsg,
+      projection,
+      boundsNative,
+      boundsWgs84: [Math.min(...longitudes), Math.min(...latitudes), Math.max(...longitudes), Math.max(...latitudes)],
+      footprintWgs84,
+      bands: bandDefinitions(family, combinedValues),
+    });
+  }
+  return combined;
+}
+
 function validateSummary(summary: Record<string, unknown>, job: DisplacementJob): void {
   const provenance = record(job.result_summary?.provenance);
   if (summary.status !== 'PASS' || summary.date_start !== job.start_date || summary.date_end !== job.end_date
@@ -233,6 +334,9 @@ export async function parseJobResultPackage(blob: Blob, job: DisplacementJob): P
       id: `${family}-${productMatch[3].padStart(3, '0')}`,
       family,
       sourcePath: entry.name,
+      sourceProductIds: [`${family}-${productMatch[3].padStart(3, '0')}`],
+      sourceCount: 1,
+      aggregation: 'source',
       referenceDate,
       secondaryDate,
       width,
@@ -246,6 +350,7 @@ export async function parseJobResultPackage(blob: Blob, job: DisplacementJob): P
     });
   }
   products.sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
+  const combinedProducts = combineJobProducts(products);
   const diagnostics = record(summary.science_diagnostics);
   return {
     jobId: job.id,
@@ -255,7 +360,7 @@ export async function parseJobResultPackage(blob: Blob, job: DisplacementJob): P
     maturity: typeof summary.maturity === 'string' ? summary.maturity : 'PROVISIONAL',
     scienceStatus: typeof diagnostics?.status === 'string' ? diagnostics.status : 'PASS',
     aoiCoordinates: parseAoiPolygon(job.aoi_wkt),
-    products,
+    products: combinedProducts,
   };
 }
 

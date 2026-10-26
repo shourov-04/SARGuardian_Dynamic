@@ -37,17 +37,14 @@ async function resultPackage(): Promise<Blob> {
     aoi_wkt_sha256: AOI_HASH,
     science_diagnostics: { status: 'PASS_WITH_LIMITATIONS' },
   }));
-  const tiff = writeArrayBuffer(new Float32Array([
-    0, 10, 0.5,
-    Number.NaN, 11, Number.NaN,
-    2, 12, 0.7,
-    -3, 13, 0.8,
-  ]), {
+  const raster = (bands: number[][]) => writeArrayBuffer(new Float32Array(
+    bands[0].flatMap((_value, pixel) => bands.map((band) => band[pixel])),
+  ), {
     width: 2,
     height: 2,
-    BitsPerSample: [32, 32, 32],
-    SampleFormat: [3, 3, 3],
-    SamplesPerPixel: 3,
+    BitsPerSample: bands.map(() => 32),
+    SampleFormat: bands.map(() => 3),
+    SamplesPerPixel: bands.length,
     ModelPixelScale: [0.01, 0.01, 0],
     ModelTiepoint: [0, 0, 0, 85, 29, 0],
     GeographicTypeGeoKey: 4326,
@@ -55,24 +52,38 @@ async function resultPackage(): Promise<Blob> {
     GTRasterTypeGeoKey: 1,
     GDAL_NODATA: 'nan',
   });
-  zip.file('product-data/GOFF-001/GOFF_20260101_20260102_PR_HH-layer2.tif', tiff);
+  zip.file('product-data/GOFF-001/GOFF_20260101_20260102_PR_HH-layer2.tif', raster([
+    [0, Number.NaN, 2, -3], [10, 11, 12, 13], [0.5, Number.NaN, 0.7, 0.8],
+  ]));
+  zip.file('product-data/GOFF-002/GOFF_20260102_20260103_PR_HH-layer2.tif', raster([
+    [0, Number.NaN, 4, -1], [20, 21, 22, 23], [0.9, Number.NaN, 0.5, 0.4],
+  ]));
+  zip.file('product-data/GUNW-003/GUNW_20260101_20260103_PR_HH.tif', raster([
+    [1, 2, 3, 4], [0.1, 0.2, 0.3, 0.4],
+  ]));
   return zip.generateAsync({ type: 'blob' });
 }
 
 describe('task result raster package', () => {
   it('decodes a verified package and preserves valid zero versus NaN cells', async () => {
     const dataset = await parseJobResultPackage(await resultPackage(), job());
-    expect(dataset.products).toHaveLength(1);
+    expect(dataset.products).toHaveLength(2);
+    expect(dataset.products.map((product) => product.id)).toEqual(['GOFF-COMBINED', 'GUNW-COMBINED']);
     const product = dataset.products[0];
-    expect(product.id).toBe('GOFF-001');
+    expect(product).toMatchObject({ family: 'GOFF', sourceCount: 2, aggregation: 'pixel_median' });
+    expect(product.sourceProductIds).toEqual(['GOFF-001', 'GOFF-002']);
     expect(product.bands.map((band) => band.key)).toEqual([
       'slant_range_offset', 'along_track_offset', 'quality',
     ]);
 
     const validZero = sampleJobMeasurement(product, product.bands[0], 85.005, 28.995);
-    expect(validZero).toMatchObject({ valid: true, value: 0, quality: 0.5, column: 0, row: 0 });
+    expect(validZero).toMatchObject({ valid: true, value: 0, column: 0, row: 0 });
+    expect(validZero.quality).toBeCloseTo(0.7, 5);
     const noData = sampleJobMeasurement(product, product.bands[0], 85.015, 28.995);
     expect(noData).toMatchObject({ valid: false, value: null, quality: null, column: 1, row: 0 });
+    const medianValue = sampleJobMeasurement(product, product.bands[0], 85.005, 28.985);
+    expect(medianValue).toMatchObject({ valid: true, value: 3, column: 0, row: 1 });
+    expect(medianValue.quality).toBeCloseTo(0.6, 5);
   });
 
   it('rejects a package whose task provenance does not match', async () => {

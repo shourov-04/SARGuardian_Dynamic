@@ -213,13 +213,13 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
         <h1>Displacement Result Explorer</h1>
         <p>Explore the validated derived rasters retained for this processing task. Offset and LOS bands are radar-coordinate measurements and are not a calibrated horizontal or 3D displacement vector.</p>
 
-        <label>Processed product
+        <label>Combined simulation
           <select value={selectedProductId} disabled={!dataset} onChange={(event) => setSelectedProductId(event.target.value)}>
-            {dataset?.products.map((product) => <option key={product.id} value={product.id}>{product.id} · {product.referenceDate} → {product.secondaryDate}</option>)
+            {dataset?.products.map((product) => <option key={product.id} value={product.id}>Combined {product.family} · {product.sourceCount} granule{product.sourceCount === 1 ? '' : 's'}</option>)
               ?? <option>Loading task results</option>}
           </select>
         </label>
-        {selectedProduct && <p className="langtang-pair-note">{selectedProduct.family} · EPSG:{selectedProduct.epsg} · {selectedProduct.width} × {selectedProduct.height}</p>}
+        {selectedProduct && <p className="langtang-pair-note">Combined {selectedProduct.family} simulation · {selectedProduct.sourceCount} validated granule{selectedProduct.sourceCount === 1 ? '' : 's'} · pixel-wise median · EPSG:{selectedProduct.epsg} · {selectedProduct.width} × {selectedProduct.height}</p>}
 
         <label>Measurement band
           <select value={selectedBandKey} disabled={!selectedProduct} onChange={(event) => setSelectedBandKey(event.target.value)}>
@@ -261,14 +261,14 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
       <aside className="langtang-inspector" aria-live="polite">
         <span>PIXEL INSPECTOR</span>
         <h2>Click the map</h2>
-        <p>Values come from the selected task GeoTIFF using its native projected grid. NaN cells remain no-data.</p>
+        <p>Values are the per-pixel median across the selected family&apos;s validated task GeoTIFFs on a common projected grid. Cells with no finite source value remain no-data.</p>
         {measurement && <dl>
           <div><dt>Longitude</dt><dd>{measurement.longitude.toFixed(6)}</dd></div>
           <div><dt>Latitude</dt><dd>{measurement.latitude.toFixed(6)}</dd></div>
           <div><dt>Raster cell</dt><dd>{measurement.column === null ? 'Outside raster' : `column ${measurement.column}, row ${measurement.row}`}</dd></div>
           <div><dt>{selectedBand?.label ?? 'Measurement'}</dt><dd>{measurement.valid && measurement.value !== null ? formatValue(measurement.value, measurement.unit) : 'No measurement'}</dd></div>
           <div><dt>{selectedProduct?.family === 'GUNW' ? 'Coherence' : 'Correlation'}</dt><dd>{measurement.quality === null ? 'No measurement' : measurement.quality.toFixed(5)}</dd></div>
-          <div><dt>Cell status</dt><dd>{measurement.valid ? 'Valid measurement' : 'Invalid / no-data'}</dd></div>
+          <div><dt>Cell status</dt><dd>{measurement.valid ? 'Valid combined measurement' : 'Invalid / no-data'}</dd></div>
         </dl>}
       </aside>
     </main>

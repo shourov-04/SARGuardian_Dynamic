@@ -133,24 +133,18 @@ def test_manifest_rejects_duplicate_product_ids(tmp_path: Path) -> None:
         raise AssertionError("duplicate product IDs were accepted")
 
 
-def test_ten_products_are_balanced_two_per_five_shards() -> None:
-    products = [{"id": f"GOFF-{index:03d}", "expected_source_bytes": 10} for index in range(1, 11)]
+def test_twenty_products_put_the_remainder_on_the_sixth_runner() -> None:
+    products = [{"id": f"GOFF-{index:03d}", "expected_source_bytes": 10} for index in range(1, 21)]
 
-    shards = [batch.product_shard(products, index, 5) for index in range(5)]
+    shards = [batch.product_shard(products, index, 6) for index in range(6)]
 
-    assert [[row["id"] for row in shard] for shard in shards] == [
-        ["GOFF-001", "GOFF-006"],
-        ["GOFF-002", "GOFF-007"],
-        ["GOFF-003", "GOFF-008"],
-        ["GOFF-004", "GOFF-009"],
-        ["GOFF-005", "GOFF-010"],
-    ]
-    assert len({row["id"] for shard in shards for row in shard}) == 10
+    assert [len(shard) for shard in shards] == [3, 3, 3, 3, 3, 5]
+    assert len({row["id"] for shard in shards for row in shard}) == 20
 
 
 def test_product_shard_rejects_unbounded_runner_count() -> None:
     try:
-        batch.product_shard([{"id": "GOFF-001"}], 0, 101)
+        batch.product_shard([{"id": "GOFF-001"}], 0, 11)
     except ValueError as error:
         assert "invalid" in str(error)
     else:
@@ -195,7 +189,7 @@ def test_sharded_batch_processes_and_validates_only_its_assigned_products(monkey
     assert summary["shard_count"] == 2
 
 
-def test_thirteen_mixed_size_products_do_not_cluster_large_tail_products() -> None:
+def test_thirteen_mixed_size_products_use_four_runners_with_the_remainder_last() -> None:
     products = [
         {"id": f"GOFF-{index:03d}", "expected_source_bytes": 1_100_000_000}
         for index in range(1, 6)
@@ -204,20 +198,19 @@ def test_thirteen_mixed_size_products_do_not_cluster_large_tail_products() -> No
         for index in range(6, 14)
     ]
 
-    shards = [batch.product_shard(products, index, 5) for index in range(5)]
+    shards = [batch.product_shard(products, index, 4) for index in range(4)]
 
-    assert [len(shard) for shard in shards] == [3, 3, 3, 2, 2]
-    assert all(sum(row["id"].startswith("GUNW") for row in shard) <= 2 for shard in shards)
-    assert [row["id"] for row in shards[4]] == ["GOFF-005", "GUNW-010"]
+    assert [len(shard) for shard in shards] == [3, 3, 3, 4]
+    assert len({row["id"] for shard in shards for row in shard}) == 13
 
 
-def test_thirty_products_are_limited_to_three_per_runner() -> None:
+def test_eighty_products_are_split_eight_per_ten_runners() -> None:
     products = [
         {"id": f"GUNW-{index:03d}", "expected_source_bytes": 2_300_000_000}
-        for index in range(1, 31)
+        for index in range(1, 81)
     ]
 
     shards = [batch.product_shard(products, index, 10) for index in range(10)]
 
-    assert [len(shard) for shard in shards] == [3] * 10
-    assert len({row["id"] for shard in shards for row in shard}) == 30
+    assert [len(shard) for shard in shards] == [8] * 10
+    assert len({row["id"] for shard in shards for row in shard}) == 80
