@@ -226,6 +226,46 @@ class Drive:
 
         raise DriveError("DRIVE_FOLDER_CREATE_RETRIES_EXHAUSTED")
 
+    def ensure_public_reader(self, file_id: str) -> None:
+        """Publish one folder as anyone-with-link reader and verify the permission."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{10,200}", file_id):
+            raise DriveError("DRIVE_PUBLIC_FOLDER_ID_INVALID")
+
+        def permissions():
+            response = self.request(
+                "GET", f"{API}/files/{file_id}/permissions",
+                params={
+                    "supportsAllDrives": "true",
+                    "fields": "permissions(id,type,role,allowFileDiscovery)",
+                },
+            )
+            try:
+                payload = response.json()
+            finally:
+                response.close()
+            rows = payload.get("permissions") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                raise DriveError("DRIVE_PUBLIC_PERMISSION_RESPONSE_INVALID")
+            return rows
+
+        rows = permissions()
+        anyone = [row for row in rows if isinstance(row, dict) and row.get("type") == "anyone"]
+        if anyone and any(row.get("role") != "reader" for row in anyone):
+            raise DriveError("DRIVE_PUBLIC_PERMISSION_CONFLICT")
+        if not anyone:
+            response = self.request(
+                "POST", f"{API}/files/{file_id}/permissions",
+                params={"supportsAllDrives": "true", "fields": "id,type,role,allowFileDiscovery"},
+                json={"type": "anyone", "role": "reader", "allowFileDiscovery": False},
+            )
+            response.close()
+            rows = permissions()
+        if not any(
+            isinstance(row, dict) and row.get("type") == "anyone" and row.get("role") == "reader"
+            for row in rows
+        ):
+            raise DriveError("DRIVE_PUBLIC_PERMISSION_VERIFICATION_FAILED")
+
     def quota(self):
         doc = self.request('GET', f'{API}/about', params={'fields': 'storageQuota(limit,usage,usageInDrive)'}).json()
         q = doc.get('storageQuota')
@@ -574,6 +614,10 @@ def main():
     p.add_argument('--granule-name')
     p.add_argument('--run-name', help='upload an aggregate run bundle under SARGuardian-DataArchive/Runs/<run-name>')
     p.add_argument('--job-id', help='store every result below the configured parent folder/<job-id>')
+    p.add_argument(
+        '--public-read', action='store_true',
+        help='after verified upload, publish the job folder as anyone-with-link reader',
+    )
     p.add_argument('--version-tag', help='isolate a granule upload under <granule>/Runs/<version-tag>; never overwrites prior runs')
     p.add_argument(
         '--existing-files-are-new', action='store_true',
@@ -588,6 +632,8 @@ def main():
     args = p.parse_args()
     if args.job_id and not __import__('re').fullmatch(r'[A-Za-z0-9_.-]{1,100}', args.job_id):
         raise DriveError('JOB_ID_INVALID')
+    if args.public_read and not args.job_id:
+        raise DriveError('PUBLIC_READ_REQUIRES_JOB_ID')
     if args.run_name:
         if args.version_tag:
             raise DriveError('RUN_UPLOAD_CANNOT_MIX_RUN_NAME_AND_VERSION_TAG')
@@ -631,7 +677,11 @@ def main():
         granule_folder = Path(args.granule_name.strip()).name
         if granule_folder.lower().endswith('.h5'): granule_folder = granule_folder[:-3]
     folder = parent
-    for name in folder_names: folder = drive.ensure_folder(folder, name)
+    job_folder = None
+    for index, name in enumerate(folder_names):
+        folder = drive.ensure_folder(folder, name)
+        if args.job_id and index == 0:
+            job_folder = folder
     # Query exact existing names before calculating projected new bytes.
     # Only allowlisted retry sidecars may be replaced on a same-run retry; science
     # products/exports remain immutable and mismatched content fails closed.
@@ -676,13 +726,20 @@ def main():
             f"reused_from_prior_run={str(row['reused']).lower()} "
             f"reused_in_upload_attempt={str(row.get('upload_action_reused', False)).lower()}"
         )
+    if args.public_read:
+        if not job_folder:
+            raise DriveError('PUBLIC_JOB_FOLDER_MISSING')
+        drive.ensure_public_reader(job_folder)
+        print("DRIVE_JOB_FOLDER_PUBLIC_READ=PASS", flush=True)
     receipt = {'schema_version':'sarguardian-drive-retention-receipt/1.0','created_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'upload_kind':'run_bundle' if args.run_name else 'single_granule',
         'job_id':str(args.job_id or '').strip() or None,
         'run_name':args.run_name, 'product_type':args.product_type, 'maturity':args.maturity, 'version_tag':args.version_tag,
         'granule_name':granule_folder, 'remote_folder_id':folder,'files':outputs,
         'uploaded_curated_bytes':sum(x['bytes'] for x in outputs),
-        'raw_product_uploaded':False,'remote_verification':'PASS','raw_source_deleted':False}
+        'raw_product_uploaded':False,'remote_verification':'PASS','raw_source_deleted':False,
+        'public_read':bool(args.public_read),
+        'public_folder_url':f'https://drive.google.com/drive/folders/{job_folder}' if args.public_read else None}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(receipt, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
     print(

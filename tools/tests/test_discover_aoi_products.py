@@ -372,4 +372,6 @@ def test_cli_summary_uses_current_pair_count_schema(tmp_path, monkeypatch, capsy
     assert "AOI_UNIQUE_ACQUISITION_PAIRS_ACROSS_FAMILIES=17" in output
     assert "AOI_BASELINE_GUNW=16" in output
     assert "AOI_BASELINE_GOFF=17" in output
-    assert "product_count=1" in output_file.read_text(encoding="utf-8")
+    github_output = output_file.read_text(encoding="utf-8")
+    assert "product_count=1" in github_output
+    assert 'shard_matrix={"include":[{"shard_index":0,"shard_count":1,"shard_number":1}]}' in github_output

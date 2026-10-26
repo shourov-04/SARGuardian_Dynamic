@@ -115,6 +115,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
+      shard_matrix: ${{ steps.discover.outputs.shard_matrix }}
       product_count: ${{ steps.discover.outputs.product_count }}
       aoi_wkt_sha256: ${{ steps.discover.outputs.aoi_wkt_sha256 }}
       orchestration_sha: ${{ steps.orch.outputs.sha }}
@@ -194,6 +195,20 @@ jobs:
             --manifest "$RUNNER_TEMP/sarguardian-aoi/manifest/manifest.json"
           echo "reported=true" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare one Drive job folder before parallel processing
+        if: inputs.job_id != ''
+        env:
+          GOOGLE_DRIVE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_JSON }}
+          GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_PARENT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PARENT_FOLDER_ID || secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -u tools/prepare_drive_job_folder.py \
+            --job-id "${{ inputs.job_id }}" \
+            --manifest "$RUNNER_TEMP/sarguardian-aoi/manifest/manifest.json" \
+            --version-tag "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
       - name: Publish the selected-product manifest
         uses: actions/upload-artifact@v4
         with:
@@ -203,11 +218,16 @@ jobs:
           retention-days: 14
 
   process-products:
-    name: Process all AOI products sequentially
+    name: Process AOI shard ${{ matrix.shard_number }} of ${{ matrix.shard_count }}
     needs: manifest
     if: needs.manifest.result == 'success'
     runs-on: ubuntu-24.04
-    # Keep the complete sequential science stream below GitHub's six-hour job ceiling.
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix: ${{ fromJSON(needs.manifest.outputs.shard_matrix) }}
+    # Each runner prepares dependencies once, then streams its balanced shard
+    # one product at a time below GitHub's six-hour job ceiling.
     timeout-minutes: 345
     env:
       PYTHONUNBUFFERED: "1"
@@ -282,13 +302,15 @@ jobs:
             --work-root "$root/work" --checkpoint-root "$root/checkpoints" \
             --retention-profile "$RETENTION_PROFILE" \
             --job-id "$DRIVE_JOB_ID" --drive-version-tag "$DRIVE_VERSION_TAG" \
-            --orchestration-sha "$AOI_ORCHESTRATION_SHA"
+            --orchestration-sha "$AOI_ORCHESTRATION_SHA" \
+            --shard-index "${{ matrix.shard_index }}" \
+            --shard-count "${{ matrix.shard_count }}"
 
       - name: Preserve all product and cleanup checkpoints together
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sarguardian-stream-products
+          name: sarguardian-stream-products-${{ matrix.shard_number }}
           path: ${{ runner.temp }}/sarguardian-aoi/stream/checkpoints
           if-no-files-found: warn
           retention-days: 14
@@ -347,11 +369,12 @@ jobs:
           name: sarguardian-aoi-run-manifest
           path: ${{ runner.temp }}/sarguardian-aoi/manifest
 
-      - name: Download sequential product processing receipts and clipped exports
+      - name: Download all parallel-shard receipts and clipped exports
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: sarguardian-stream-products
+          pattern: sarguardian-stream-products-*
+          merge-multiple: true
           path: ${{ runner.temp }}/sarguardian-aoi/stream-products
 
       - name: Build dashboard, product table, quicklooks and result bundle
@@ -418,29 +441,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload dashboard bundle and summary to private Drive
-        if: always()
+      - name: Upload dashboard bundle and publish the completed job folder
+        if: steps.aggregate.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/sarguardian-aoi/dashboard"
           if [[ ! -s "$root/aoi-derived-results.zip" || -z "$GOOGLE_DRIVE_OAUTH_CLIENT_JSON" || -z "$GOOGLE_DRIVE_REFRESH_TOKEN" || -z "$GOOGLE_DRIVE_PARENT_FOLDER_ID" ]]; then
-            echo "PRIVATE_DRIVE_DASHBOARD_UPLOAD=SKIPPED_MISSING_BUNDLE_OR_DRIVE_SECRETS"
+            echo "PUBLIC_DRIVE_DASHBOARD_UPLOAD=SKIPPED_MISSING_BUNDLE_OR_DRIVE_SECRETS"
             exit 0
           fi
           python tools/drive_resumable_upload.py \
             --root "$root" --run-name "$RUN_ID_SAFE" \
-            --job-id "$DRIVE_JOB_ID" \
+            --job-id "$DRIVE_JOB_ID" --public-read \
             --files "$root/aoi-derived-results.zip" "$root/aoi-run-summary.json" "$root/products.csv" \
             --out "$root/drive-dashboard-upload-receipt.json"
           python tools/drive_resumable_upload.py \
             --root "$root" --run-name "$RUN_ID_SAFE" \
-            --job-id "$DRIVE_JOB_ID" \
+            --job-id "$DRIVE_JOB_ID" --public-read \
             --files "$root/drive-dashboard-upload-receipt.json" \
             --out "$root/drive-dashboard-receipt-upload.json"
-          echo "PRIVATE_DRIVE_DASHBOARD_UPLOAD=PASS"
+          echo "PUBLIC_DRIVE_DASHBOARD_UPLOAD=PASS"
 
-      - name: Preserve private-storage receipt for the account result callback
+      - name: Preserve verified storage receipt for the account result callback
         if: always()
         uses: actions/upload-artifact@v4
         with:

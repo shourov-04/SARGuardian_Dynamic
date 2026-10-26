@@ -53,7 +53,9 @@ def test_upstream_dashboard_and_drive_receipt_build_version_two_result(tmp_path:
     })
     content = b"verified bundle"
     write_json(tmp_path / "storage" / "drive-dashboard-upload-receipt.json", {
-        "remote_verification": "PASS", "remote_folder_id": "private-folder-id",
+        "remote_verification": "PASS", "remote_folder_id": "public-folder-id",
+        "public_read": True,
+        "public_folder_url": "https://drive.google.com/drive/folders/public-folder-id",
         "files": [
             {"id": f"private-file-id-{index}", "name": name,
              "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
@@ -68,6 +70,7 @@ def test_upstream_dashboard_and_drive_receipt_build_version_two_result(tmp_path:
     assert result["storage_verification"]["status"] == "PASS"
     assert result["products"] == products
     assert result["artifacts"][0]["drive_file_id"] == "private-file-id-0"
+    assert result["storage_verification"]["access"] == "anyone_with_link_reader"
     assert result["catalog_granule_counts"] == {"GUNW": 8, "GOFF": 5}
     assert result["selected_granule_counts"] == {"GUNW": 1, "GOFF": 1}
     assert result["provenance"]["github_run_id"] == "12345"

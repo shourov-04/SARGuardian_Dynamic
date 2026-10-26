@@ -300,6 +300,30 @@ def test_private_artifact_download_requires_owner_and_rechecks_hash(monkeypatch)
     assert api.get(f"/api/displacement-jobs/{created['id']}/artifacts/0").status_code == 409
 
 
+def test_artifact_download_falls_back_to_verified_public_drive_bytes(monkeypatch) -> None:
+    store = DisplacementStore()
+    api = client(monkeypatch, store)
+    created = api.post("/api/displacement-jobs", json=payload()).json()
+    data = b"public verified scientific bytes"
+    assert store.row
+    store.row.update({"state": "succeeded", "result_summary": {
+        "schema_version": 2, "validation": {"status": "PASS"}, "storage_verification": {"status": "PASS"},
+        "artifacts": [{"path": "aoi-derived-results.zip", "kind": "aoi_derived_result_bundle",
+                       "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                       "drive_file_id": "abcdefghijk"}],
+    }})
+
+    def unavailable(_file_id):
+        raise main_module.DriveUploadError("OAuth storage is unavailable")
+
+    monkeypatch.setattr(main_module, "download_private_result", unavailable)
+    monkeypatch.setattr(main_module, "download_public_result", lambda _id: ({"bytes": len(data)}, data))
+
+    response = api.get(f"/api/displacement-jobs/{created['id']}/artifacts/0")
+    assert response.status_code == 200
+    assert response.content == data
+
+
 def test_dispatch_uses_only_configured_server_values(monkeypatch) -> None:
     captured: dict = {}
 

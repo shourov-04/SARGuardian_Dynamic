@@ -94,12 +94,15 @@ def success_summary(dashboard_root: Path, github_run_id: str) -> dict[str, Any]:
                    or isinstance(baseline_counts.get(family), bool)
                    or baseline_counts[family] < 0 for family in ("GUNW", "GOFF"))):
         raise CallbackError("Dynamic-AOI manifest contains invalid catalog product counts.")
-    if receipt.get("remote_verification") != "PASS" or not isinstance(files, list) or not files:
-        raise CallbackError("Dynamic-AOI dashboard files were not verified in private Drive storage.")
+    if (receipt.get("remote_verification") != "PASS" or receipt.get("public_read") is not True
+            or not isinstance(files, list) or not files):
+        raise CallbackError("Dynamic-AOI dashboard files were not verified in public result storage.")
     remote_folder_id = receipt.get("remote_folder_id")
     if (not isinstance(remote_folder_id, str)
             or not re.fullmatch(r"[A-Za-z0-9_-]{10,200}", remote_folder_id)):
-        raise CallbackError("Dynamic-AOI Drive receipt does not identify a valid private result folder.")
+        raise CallbackError("Dynamic-AOI Drive receipt does not identify a valid result folder.")
+    if receipt.get("public_folder_url") != f"https://drive.google.com/drive/folders/{remote_folder_id}":
+        raise CallbackError("Dynamic-AOI Drive receipt does not verify the public result folder URL.")
     expected_names = {"aoi-derived-results.zip", "aoi-run-summary.json", "products.csv"}
     if {item.get("name") for item in files if isinstance(item, dict)} != expected_names:
         raise CallbackError("Drive receipt does not contain the complete account result package.")
@@ -129,6 +132,8 @@ def success_summary(dashboard_root: Path, github_run_id: str) -> dict[str, Any]:
         "storage_verification": {
             "status": "PASS", "provider": "google_drive",
             "remote_folder_id": remote_folder_id,
+            "access": "anyone_with_link_reader",
+            "public_folder_url": receipt["public_folder_url"],
         },
         "artifacts": artifacts,
         "products": products,

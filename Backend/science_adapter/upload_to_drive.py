@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -56,7 +56,10 @@ def load_drive_config(environ: dict[str, str] | None = None) -> DriveConfig:
     values = environ if environ is not None else os.environ
     raw_client = values.get("GOOGLE_DRIVE_OAUTH_CLIENT_JSON", "").strip()
     refresh_token = values.get("GOOGLE_DRIVE_REFRESH_TOKEN", "").strip()
-    parent_folder_id = values.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+    parent_folder_id = (
+        values.get("GOOGLE_DRIVE_PARENT_FOLDER_ID", "")
+        or values.get("GOOGLE_DRIVE_FOLDER_ID", "")
+    ).strip()
     if not raw_client or not refresh_token or not parent_folder_id:
         raise DriveUploadError("Google Drive result storage is not fully configured.")
     if not FOLDER_ID_PATTERN.fullmatch(parent_folder_id):
@@ -329,6 +332,31 @@ def upload_validated_results(work_dir: Path, *, config: DriveConfig | None = Non
 def download_private_result(file_id: str, *, config: DriveConfig | None = None, session: Any | None = None) -> tuple[dict[str, Any], bytes]:
     """Used only after API job-owner authorization; never exposed to browsers."""
     return DriveClient(config or load_drive_config(), session=session).download_file(file_id)
+
+
+def download_public_result(file_id: str, *, session: Any | None = None) -> tuple[dict[str, Any], bytes]:
+    """Download a checksum-verified workflow artifact from an anyone-with-link folder."""
+    if not FOLDER_ID_PATTERN.fullmatch(file_id):
+        raise DriveUploadError("Result storage file identifier is invalid.")
+    client = session or requests.Session()
+    try:
+        response = client.get(
+            "https://drive.usercontent.google.com/download",
+            params={"id": file_id, "export": "download", "confirm": "t"},
+            timeout=300,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        final = urlparse(str(getattr(response, "url", "https://drive.usercontent.google.com/")))
+        if final.scheme != "https" or not (
+            final.hostname == "drive.usercontent.google.com"
+            or (final.hostname or "").endswith(".googleusercontent.com")
+        ):
+            raise DriveUploadError("Public result storage redirected to an untrusted host.")
+        data = response.content
+    except requests.RequestException as exc:
+        raise DriveUploadError("Could not retrieve the public result artifact.") from exc
+    return {"bytes": len(data), "md5": hashlib.md5(data).hexdigest()}, data  # nosec: integrity metadata
 
 
 def main() -> int:

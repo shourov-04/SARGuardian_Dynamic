@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Process a dynamic-AOI manifest sequentially in one prepared GitHub runner."""
+"""Process one balanced dynamic-AOI shard sequentially in a prepared runner."""
 from __future__ import annotations
 
 import argparse
@@ -47,7 +47,19 @@ def load_products(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return value, products
 
 
-def write_summary(path: Path, *, total: int, completed: list[str], failed: str | None, unprocessed: list[str]) -> None:
+def product_shard(products: list[dict[str, Any]], shard_index: int, shard_count: int) -> list[dict[str, Any]]:
+    if shard_count < 1 or shard_count > 5 or shard_index < 0 or shard_index >= shard_count:
+        raise ValueError("Product shard selection is invalid.")
+    start = len(products) * shard_index // shard_count
+    stop = len(products) * (shard_index + 1) // shard_count
+    selected = products[start:stop]
+    if not selected:
+        raise ValueError("Product shard is empty.")
+    return selected
+
+
+def write_summary(path: Path, *, total: int, completed: list[str], failed: str | None,
+                  unprocessed: list[str], shard_index: int = 0, shard_count: int = 1) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "schema_version": "sarguardian-sequential-batch/1.0",
@@ -60,6 +72,8 @@ def write_summary(path: Path, *, total: int, completed: list[str], failed: str |
         "unprocessed_product_ids": unprocessed,
         "dependency_setup_count": 1,
         "maximum_simultaneous_raw_products": 1,
+        "shard_index": shard_index,
+        "shard_count": shard_count,
     }, indent=2) + "\n", encoding="utf-8")
 
 
@@ -73,12 +87,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--job-id", default="")
     parser.add_argument("--drive-version-tag", required=True)
     parser.add_argument("--orchestration-sha", required=True)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    manifest, products = load_products(args.manifest)
+    manifest, all_products = load_products(args.manifest)
+    products = product_shard(all_products, args.shard_index, args.shard_count)
+    shard_manifest = dict(manifest)
+    shard_manifest["products"] = products
     args.work_root.mkdir(parents=True, exist_ok=True)
     (args.checkpoint_root / "products").mkdir(parents=True, exist_ok=True)
     (args.checkpoint_root / "cleanups").mkdir(parents=True, exist_ok=True)
@@ -113,7 +132,7 @@ def main() -> int:
         result = subprocess.run(command, env=environment, check=False)
         print("::endgroup::", flush=True)
         if result.returncode:
-            first_plan = plan(manifest, args.checkpoint_root / "products", args.checkpoint_root / "cleanups")
+            first_plan = plan(shard_manifest, args.checkpoint_root / "products", args.checkpoint_root / "cleanups")
             decision = next(row for row in first_plan["decisions"] if row["product_id"] == product_id)
             if decision["status"] == "RETRY":
                 prior = args.checkpoint_root / "prior" / f"sarguardian-granule-{product_id}"
@@ -146,11 +165,12 @@ def main() -> int:
         print(f"BATCH_PROGRESS completed={len(completed)} total={total}", flush=True)
 
     retry_report = plan(
-        manifest,
+        shard_manifest,
         args.checkpoint_root / "products",
         args.checkpoint_root / "cleanups",
     )
-    (args.checkpoint_root / "retry-plan.json").write_text(
+    suffix = "" if args.shard_count == 1 else f"-shard-{args.shard_index + 1}-of-{args.shard_count}"
+    (args.checkpoint_root / f"retry-plan{suffix}.json").write_text(
         json.dumps(retry_report, indent=2) + "\n", encoding="utf-8"
     )
     if failed is None and (
@@ -168,15 +188,21 @@ def main() -> int:
             flush=True,
         )
     write_summary(
-        args.checkpoint_root / "streaming-summary.json",
+        args.checkpoint_root / f"streaming-summary{suffix}.json",
         total=total,
         completed=completed,
         failed=failed,
         unprocessed=unprocessed,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
     )
     if failed is not None:
         return 1
-    print(f"STREAMING_BATCH_STATUS=PASS products={total} dependency_setup_count=1", flush=True)
+    print(
+        f"STREAMING_BATCH_STATUS=PASS products={total} dependency_setup_count=1 "
+        f"shard={args.shard_index + 1}/{args.shard_count}",
+        flush=True,
+    )
     return 0
 
 

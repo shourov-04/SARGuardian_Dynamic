@@ -40,7 +40,7 @@ from .persistence import (
     PersistenceError,
     get_job_store,
 )
-from science_adapter.upload_to_drive import DriveUploadError, download_private_result
+from science_adapter.upload_to_drive import DriveUploadError, download_private_result, download_public_result
 
 logger = logging.getLogger(__name__)
 
@@ -693,7 +693,7 @@ def _valid_private_artifacts(value: object) -> bool:
 
 @app.get("/api/displacement-jobs/{job_id}/artifacts/{artifact_index}")
 async def download_displacement_artifact(job_id: UUID, artifact_index: int, user: dict = Depends(get_current_user)) -> Response:
-    """Stream one private, verified Drive artifact to its authenticated owner."""
+    """Stream one verified Drive artifact to its authenticated job owner."""
     if artifact_index < 0 or artifact_index > 10_000:
         raise HTTPException(status_code=404, detail="Result artifact was not found.")
     try:
@@ -708,7 +708,10 @@ async def download_displacement_artifact(job_id: UUID, artifact_index: int, user
     try:
         received, data = download_private_result(artifact["drive_file_id"])
     except DriveUploadError:
-        raise HTTPException(status_code=503, detail="Private result storage is unavailable. Retry the download.") from None
+        try:
+            received, data = download_public_result(artifact["drive_file_id"])
+        except DriveUploadError:
+            raise HTTPException(status_code=503, detail="Result storage is unavailable. Retry the download.") from None
     import hashlib
     if received["bytes"] != artifact["bytes"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]:
         raise HTTPException(status_code=409, detail="Stored result artifact no longer matches the validated inventory.")

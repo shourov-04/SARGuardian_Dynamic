@@ -102,7 +102,13 @@ def test_account_workflow_calls_the_upstream_dynamic_aoi_streaming_pipeline() ->
     assert "python tools/discover_aoi_products.py" in dashboard
     assert "python -u tools/run_aoi_streaming_batch.py" in dashboard
     assert "uses: ./.github/workflows/sarguardian-aoi-product-worker.yml" not in dashboard
-    assert "max-parallel:" not in dashboard
+    assert "max-parallel: 5" in dashboard
+    assert "--shard-index" in dashboard
+    assert "--shard-count" in dashboard
+    assert "pattern: sarguardian-stream-products-*" in dashboard
+    assert "merge-multiple: true" in dashboard
+    assert "tools/prepare_drive_job_folder.py" in dashboard
+    assert "--public-read" in dashboard
     assert dashboard.count("Install pinned science and retention dependencies once") == 1
     assert "timeout-minutes: 345" in dashboard
     assert "name: sarguardian-stream-products" in dashboard

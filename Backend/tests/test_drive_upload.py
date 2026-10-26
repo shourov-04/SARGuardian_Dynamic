@@ -102,3 +102,56 @@ def test_rejects_non_web_or_untrusted_google_oauth_configuration() -> None:
             "GOOGLE_DRIVE_REFRESH_TOKEN": "refresh",
             "GOOGLE_DRIVE_FOLDER_ID": "13BIAepPGLlYYmscUlNPeMCdtepYshjT4",
         })
+
+
+def test_drive_config_accepts_the_workflow_parent_folder_variable() -> None:
+    config = drive.load_drive_config({
+        "GOOGLE_DRIVE_OAUTH_CLIENT_JSON": json.dumps({"web": {
+            "client_id": "client", "client_secret": "secret",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }}),
+        "GOOGLE_DRIVE_REFRESH_TOKEN": "refresh",
+        "GOOGLE_DRIVE_PARENT_FOLDER_ID": "13BIAepPGLlYYmscUlNPeMCdtepYshjT4",
+    })
+
+    assert config.parent_folder_id == "13BIAepPGLlYYmscUlNPeMCdtepYshjT4"
+
+
+def test_downloads_public_result_only_from_googleusercontent() -> None:
+    content = b"verified public result"
+
+    class PublicResponse:
+        url = "https://drive.usercontent.google.com/download?id=abcdefghijk"
+        content = b"verified public result"
+
+        def raise_for_status(self) -> None:
+            pass
+
+    class PublicSession:
+        def get(self, url, **kwargs):
+            assert url == "https://drive.usercontent.google.com/download"
+            assert kwargs["params"]["id"] == "abcdefghijk"
+            assert kwargs["allow_redirects"] is True
+            return PublicResponse()
+
+    receipt, downloaded = drive.download_public_result("abcdefghijk", session=PublicSession())
+
+    assert downloaded == content
+    assert receipt["bytes"] == len(content)
+    assert receipt["md5"] == hashlib.md5(content).hexdigest()
+
+
+def test_rejects_public_result_redirect_to_untrusted_host() -> None:
+    class RedirectedResponse:
+        url = "https://attacker.example/result.zip"
+        content = b"untrusted"
+
+        def raise_for_status(self) -> None:
+            pass
+
+    class RedirectedSession:
+        def get(self, _url, **_kwargs):
+            return RedirectedResponse()
+
+    with pytest.raises(drive.DriveUploadError, match="untrusted host"):
+        drive.download_public_result("abcdefghijk", session=RedirectedSession())

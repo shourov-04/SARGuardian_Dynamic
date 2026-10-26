@@ -131,3 +131,65 @@ def test_manifest_rejects_duplicate_product_ids(tmp_path: Path) -> None:
         assert "duplicated" in str(error)
     else:
         raise AssertionError("duplicate product IDs were accepted")
+
+
+def test_ten_products_are_balanced_two_per_five_shards() -> None:
+    products = [{"id": f"GOFF-{index:03d}"} for index in range(1, 11)]
+
+    shards = [batch.product_shard(products, index, 5) for index in range(5)]
+
+    assert [[row["id"] for row in shard] for shard in shards] == [
+        ["GOFF-001", "GOFF-002"],
+        ["GOFF-003", "GOFF-004"],
+        ["GOFF-005", "GOFF-006"],
+        ["GOFF-007", "GOFF-008"],
+        ["GOFF-009", "GOFF-010"],
+    ]
+    assert len({row["id"] for shard in shards for row in shard}) == 10
+
+
+def test_product_shard_rejects_more_than_five_runners() -> None:
+    try:
+        batch.product_shard([{"id": "GOFF-001"}], 0, 6)
+    except ValueError as error:
+        assert "invalid" in str(error)
+    else:
+        raise AssertionError("more than five processing shards were accepted")
+
+
+def test_sharded_batch_processes_and_validates_only_its_assigned_products(monkeypatch, tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest(manifest_path)
+    calls: list[list[str]] = []
+    planned_ids: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        product_id = command[command.index("--product-id") + 1]
+        (tmp_path / "work" / product_id / "raw").mkdir(parents=True)
+        return SimpleNamespace(returncode=0)
+
+    def shard_plan(manifest_value, _product_root, _cleanup_root):
+        products = manifest_value["products"]
+        planned_ids.append([row["id"] for row in products])
+        return {
+            "products_complete": len(products), "retry_count": 0, "terminal_failure_count": 0,
+            "retry_matrix": [], "decisions": [
+                {"product_id": row["id"], "status": "PASS"} for row in products
+            ],
+        }
+
+    monkeypatch.setattr(batch.subprocess, "run", run)
+    monkeypatch.setattr(batch, "plan", shard_plan)
+    monkeypatch.setattr(batch.sys, "argv", argv(tmp_path, manifest_path) + [
+        "--shard-index", "1", "--shard-count", "2",
+    ])
+
+    assert batch.main() == 0
+    assert [call[call.index("--product-id") + 1] for call in calls] == ["GOFF-002"]
+    assert planned_ids == [["GOFF-002"]]
+    summary = json.loads(
+        (tmp_path / "checkpoints" / "streaming-summary-shard-2-of-2.json").read_text(encoding="utf-8")
+    )
+    assert summary["shard_index"] == 1
+    assert summary["shard_count"] == 2

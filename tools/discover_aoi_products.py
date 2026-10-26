@@ -736,8 +736,17 @@ def main() -> int:
         for row in manifest["products"]
     ]
     compact = json.dumps(matrix, separators=(",", ":"))
+    shard_count = min(5, len(matrix))
+    shard_matrix = json.dumps(
+        {"include": [
+            {"shard_index": index, "shard_count": shard_count, "shard_number": index + 1}
+            for index in range(shard_count)
+        ]},
+        separators=(",", ":"),
+    )
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         output.write("matrix=" + compact + "\n")
+        output.write("shard_matrix=" + shard_matrix + "\n")
         output.write(f"product_count={len(matrix)}\n")
         output.write(f"aoi_wkt_sha256={manifest['aoi_wkt_sha256']}\n")
         output.write(f"run_profile={manifest['run_profile']}\n")
