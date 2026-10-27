@@ -97,6 +97,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--orchestration-sha", required=True)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument(
+        "--continue-after-failure",
+        action="store_true",
+        help="Preserve a failed checkpoint, clean temporary work and continue with remaining products.",
+    )
     return parser.parse_args()
 
 
@@ -163,15 +168,31 @@ def main() -> int:
                 )
                 result = subprocess.run(retry_command, env=environment, check=False)
             if result.returncode:
-                failed = product_id
-                unprocessed = [str(item["id"]) for item in products[ordinal:]]
+                if failed is None:
+                    failed = product_id
                 print(f"BATCH_PRODUCT_FAILED ordinal={ordinal} total={total} product_id={product_id}", flush=True)
+                if args.continue_after_failure:
+                    shutil.rmtree(args.work_root / product_id, ignore_errors=True)
+                    print(
+                        f"BATCH_RECOVERY_CONTINUE next_ordinal={ordinal + 1} total={total}",
+                        flush=True,
+                    )
+                    continue
+                unprocessed = [str(item["id"]) for item in products[ordinal:]]
                 break
         raw_files = hdf5_files(args.work_root / product_id / "raw")
         if raw_files:
-            failed = product_id
-            unprocessed = [str(item["id"]) for item in products[ordinal:]]
+            if failed is None:
+                failed = product_id
             print(f"ERROR=RAW_PRODUCT_REMAINS_AFTER_VERIFIED_CLEANUP product_id={product_id}", flush=True)
+            if args.continue_after_failure:
+                shutil.rmtree(args.work_root / product_id, ignore_errors=True)
+                print(
+                    f"BATCH_RECOVERY_CONTINUE next_ordinal={ordinal + 1} total={total}",
+                    flush=True,
+                )
+                continue
+            unprocessed = [str(item["id"]) for item in products[ordinal:]]
             break
         shutil.rmtree(args.work_root / product_id)
         completed.append(product_id)

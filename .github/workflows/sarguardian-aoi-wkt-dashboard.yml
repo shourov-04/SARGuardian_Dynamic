@@ -226,6 +226,7 @@ jobs:
       fail-fast: false
       max-parallel: 10
       matrix: ${{ fromJSON(needs.manifest.outputs.shard_matrix) }}
+    continue-on-error: true
     # Each runner prepares dependencies once, then streams its balanced shard
     # one product at a time below GitHub's six-hour job ceiling.
     timeout-minutes: 345
@@ -315,9 +316,137 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  recover-products:
+    name: Recover retryable products after all primary runners
+    needs: [manifest, process-products]
+    if: always() && needs.manifest.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    env:
+      PYTHONUNBUFFERED: "1"
+      SARGUARDIAN_AOI_WKT: ${{ inputs.aoi_wkt }}
+      AOI_ORCHESTRATION_SHA: ${{ needs.manifest.outputs.orchestration_sha }}
+      SCIENCE_COMMIT: 10639a916c9829850775410b3ed7de62e527770d
+      RETENTION_PROFILE: ${{ inputs.retention_profile }}
+      DRIVE_JOB_ID: ${{ inputs.job_id }}
+      DRIVE_VERSION_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+      EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
+      EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
+      EARTHDATA_TOKEN: ${{ secrets.EARTHDATA_TOKEN }}
+      GOOGLE_DRIVE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_JSON }}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+      GOOGLE_DRIVE_PARENT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PARENT_FOLDER_ID || secrets.GOOGLE_DRIVE_FOLDER_ID }}
+    steps:
+      - name: Checkout recovery orchestration at the manifest revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.manifest.outputs.orchestration_sha }}
+
+      - name: Verify recovery orchestration revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$AOI_ORCHESTRATION_SHA"
+          echo "AOI_RECOVERY_ORCHESTRATION_REVISION_VERIFIED=$actual"
+
+      - name: Set up Python once for recovery
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          check-latest: false
+
+      - name: Download the exact AOI run manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: sarguardian-aoi-run-manifest
+          path: ${{ runner.temp }}/sarguardian-aoi/recovery/manifest
+
+      - name: Collect every primary runner checkpoint
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sarguardian-stream-products-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/sarguardian-aoi/recovery/checkpoints
+
+      - name: Plan only retryable or missing products
+        id: recovery_plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sarguardian-aoi/recovery"
+          mkdir -p "$root/checkpoints/products" "$root/checkpoints/cleanups" "$root/plan"
+          python -u tools/plan_aoi_retries.py \
+            --manifest "$root/manifest/manifest.json" \
+            --product-root "$root/checkpoints/products" \
+            --cleanup-root "$root/checkpoints/cleanups" \
+            --out "$root/plan/retry-plan.json" \
+            --retry-manifest-out "$root/plan/retry-manifest.json"
+
+      - name: Checkout the pinned scientific engine once for recovery
+        if: steps.recovery_plan.outputs.retry_count != '0'
+        uses: actions/checkout@v4
+        with:
+          repository: moshiour0/SARGuardian
+          ref: 10639a916c9829850775410b3ed7de62e527770d
+          path: science-source
+
+      - name: Verify pinned recovery science revision
+        if: steps.recovery_plan.outputs.retry_count != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C science-source rev-parse HEAD)"
+          test "$actual" = "$SCIENCE_COMMIT"
+          echo "RECOVERY_SCIENCE_REVISION_VERIFIED=$actual"
+
+      - name: Install recovery dependencies once
+        if: steps.recovery_plan.outputs.retry_count != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r science-source/requirements.txt
+          python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r tools/requirements-retention.txt
+
+      - name: Recover failed granules sequentially
+        id: recover
+        if: steps.recovery_plan.outputs.retry_count != '0'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sarguardian-aoi/recovery"
+          python -u tools/run_aoi_streaming_batch.py \
+            --manifest "$root/plan/retry-manifest.json" \
+            --science-root "$PWD/science-source" \
+            --work-root "$root/work" --checkpoint-root "$root/checkpoints" \
+            --retention-profile "$RETENTION_PROFILE" \
+            --job-id "$DRIVE_JOB_ID" --drive-version-tag "$DRIVE_VERSION_TAG" \
+            --orchestration-sha "$AOI_ORCHESTRATION_SHA" \
+            --continue-after-failure
+
+      - name: Publish consolidated primary and recovery checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarguardian-consolidated-products
+          path: ${{ runner.temp }}/sarguardian-aoi/recovery/checkpoints
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce successful recovery
+        if: always() && steps.recovery_plan.outputs.retry_count != '0'
+        shell: bash
+        env:
+          RECOVERY_OUTCOME: ${{ steps.recover.outcome }}
+        run: |
+          set -euo pipefail
+          test "$RECOVERY_OUTCOME" = "success"
+
   dashboard:
     name: Assemble results dashboard and downloadable maps
-    needs: [manifest, process-products]
+    needs: [manifest, process-products, recover-products]
     if: always() && needs.manifest.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -377,6 +506,13 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/sarguardian-aoi/stream-products
 
+      - name: Download consolidated recovery receipts and clipped exports
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: sarguardian-consolidated-products
+          path: ${{ runner.temp }}/sarguardian-aoi/recovery-products
+
       - name: Build dashboard, product table, quicklooks and result bundle
         id: aggregate
         shell: bash
@@ -384,10 +520,15 @@ jobs:
           set -uo pipefail
           root="$RUNNER_TEMP/sarguardian-aoi"
           mkdir -p "$root/dashboard"
+          artifact_root="$root/recovery-products/products"
+          if [[ ! -d "$artifact_root" ]]; then
+            artifact_root="$root/stream-products/products"
+          fi
+          echo "AOI_DASHBOARD_ARTIFACT_ROOT=$artifact_root"
           status=0
           python tools/aggregate_aoi_run.py \
             --manifest "$root/manifest/manifest.json" \
-            --artifact-root "$root/stream-products/products" \
+            --artifact-root "$artifact_root" \
             --science-root "$PWD/science-source" \
             --out-root "$root/dashboard" 2>&1 | tee "$root/dashboard-build.log" || status=$?
           echo "script_exit=$status" >> "$GITHUB_OUTPUT"

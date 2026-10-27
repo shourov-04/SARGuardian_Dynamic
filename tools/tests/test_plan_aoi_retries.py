@@ -100,3 +100,30 @@ def test_structural_validation_failure_after_successful_reader_is_terminal(tmp_p
     assert result["decisions"][0]["terminal_reason"] == (
         "NON_RETRYABLE_STRUCTURAL_VALIDATION_FAILURE_AFTER_SUCCESSFUL_READER"
     )
+
+
+def test_retry_manifest_contains_only_retryable_products(tmp_path):
+    manifest, product_root, cleanup_root = _inputs(
+        tmp_path,
+        {"download": "failure", "aoi_preflight": "skipped", "reader": "skipped"},
+    )
+    manifest["products"].append({
+        "id": "GUNW-002",
+        "granule_name": "NISAR_L2_PR_GUNW_TEST_PRODUCT",
+        "product_type": "GUNW",
+        "maturity": "PROVISIONAL",
+        "expected_source_bytes": 200,
+    })
+    terminal = product_root / "sarguardian-granule-GUNW-002"
+    terminal.mkdir(parents=True)
+    (terminal / "product-run-diagnostics.json").write_text(json.dumps({
+        "step_outcomes": {"download": "failure"},
+        "download_diagnostics": ["DOWNLOAD_FAILURE_RETRYABLE=no"],
+    }), encoding="utf-8")
+
+    result = planner.plan(manifest, product_root, cleanup_root)
+    recovery = planner.build_retry_manifest(manifest, result)
+
+    assert [product["id"] for product in recovery["products"]] == ["GOFF-001"]
+    assert recovery["recovery_product_count"] == 1
+    assert recovery["recovery_source_run_id"] == "test-run"

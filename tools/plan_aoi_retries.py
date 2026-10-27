@@ -108,12 +108,20 @@ def plan(manifest: dict[str, Any], product_root: Path, cleanup_root: Path) -> di
         "decisions":decisions,
     }
 
+def build_retry_manifest(manifest: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    recovery=dict(manifest)
+    recovery["products"]=list(result["retry_matrix"])
+    recovery["recovery_product_count"]=len(recovery["products"])
+    recovery["recovery_source_run_id"]=manifest.get("run_id")
+    return recovery
+
 def main() -> int:
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--manifest",required=True,type=Path)
     p.add_argument("--product-root",required=True,type=Path)
     p.add_argument("--cleanup-root",required=True,type=Path)
     p.add_argument("--out",required=True,type=Path)
+    p.add_argument("--retry-manifest-out",type=Path)
     a=p.parse_args()
     manifest=read_json(a.manifest)
     if manifest is None:
@@ -122,6 +130,12 @@ def main() -> int:
     result=plan(manifest,a.product_root,a.cleanup_root)
     a.out.parent.mkdir(parents=True,exist_ok=True)
     a.out.write_text(json.dumps(result,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
+    if a.retry_manifest_out is not None:
+        a.retry_manifest_out.parent.mkdir(parents=True,exist_ok=True)
+        a.retry_manifest_out.write_text(
+            json.dumps(build_retry_manifest(manifest,result),indent=2,ensure_ascii=False)+"\n",
+            encoding="utf-8",
+        )
     with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8") as out:
         out.write("retry_matrix="+json.dumps(result["retry_matrix"],separators=(",",":"))+"\n")
         out.write("retry_count="+str(result["retry_count"])+"\n")

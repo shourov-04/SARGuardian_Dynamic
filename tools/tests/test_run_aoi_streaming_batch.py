@@ -84,6 +84,39 @@ def test_batch_stops_before_the_next_download_when_a_product_fails(monkeypatch, 
     assert summary["unprocessed_product_ids"] == ["GOFF-002"]
 
 
+def test_recovery_batch_continues_after_a_product_still_fails(monkeypatch, tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest(manifest_path)
+    calls: list[str] = []
+
+    def run(command, **_kwargs):
+        product_id = command[command.index("--product-id") + 1]
+        calls.append(product_id)
+        (tmp_path / "work" / product_id).mkdir(parents=True, exist_ok=True)
+        return SimpleNamespace(returncode=1 if product_id == "GUNW-001" else 0)
+
+    def recovery_plan(manifest_value, _product_root, _cleanup_root):
+        decisions = [{
+            "product_id": product["id"],
+            "status": "RETRY" if product["id"] == "GUNW-001" else "PASS",
+            "reasons": ["MISSING_PRODUCT_CHECKPOINT"] if product["id"] == "GUNW-001" else [],
+        } for product in manifest_value["products"]]
+        return {
+            "products_complete": 1, "retry_count": 1, "terminal_failure_count": 0,
+            "retry_matrix": [], "decisions": decisions,
+        }
+
+    monkeypatch.setattr(batch.subprocess, "run", run)
+    monkeypatch.setattr(batch, "plan", recovery_plan)
+    monkeypatch.setattr(batch.sys, "argv", argv(tmp_path, manifest_path) + ["--continue-after-failure"])
+
+    assert batch.main() == 1
+    assert calls == ["GUNW-001", "GUNW-001", "GOFF-002"]
+    summary = json.loads((tmp_path / "checkpoints" / "streaming-summary.json").read_text(encoding="utf-8"))
+    assert summary["failed_product_id"] == "GUNW-001"
+    assert summary["unprocessed_product_ids"] == []
+
+
 def test_batch_retries_one_retryable_product_once_in_the_same_runner(monkeypatch, tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     manifest(manifest_path)
