@@ -36,7 +36,7 @@ describe('job-scoped displacement visualization availability', () => {
     expect(availability.available).toBe(true);
     if (!availability.available) throw new Error(availability.reason);
     const url = new URL(availability.href, 'https://example.test');
-    expect(url.pathname).toBe('/landslide/langtang');
+    expect(url.pathname).toBe('/landslide/result');
     expect(url.searchParams.get('mode')).toBe('job');
     expect(url.searchParams.get('job')).toBe(JOB_ID);
     expect(url.searchParams.get('return')).toBe(LANDSLIDE_DISPLACEMENT_PATH);

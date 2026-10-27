@@ -7,7 +7,7 @@ import { LandslidePage } from '../landslide/ui/LandslidePage';
 import { isLangtangExplorerEnabled } from '../landslide/langtang/feature';
 import { canOpenLangtangExplorer, resolveLangtangRouteContext, visualizationForJob } from '../landslide/langtang/availability';
 import { auth, firebaseConfigured, googleProvider, missingFirebaseConfig } from './firebase';
-import { isLandslideDisplacementRoute, isLandslideLangtangRoute, isLandslideResultsRoute, isLandslideRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_LANGTANG_PATH, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
+import { isLandslideDisplacementRoute, isLandslideLangtangRoute, isLandslideResultsRoute, isLandslideRoute, isLandslideVisualizationRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_LANGTANG_PATH, LANDSLIDE_PATH, LANDSLIDE_RESULT_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
 
 const LangtangExplorerPage = lazy(() => import('../landslide/langtang/LangtangExplorerPage')
   .then((module) => ({ default: module.LangtangExplorerPage })));
@@ -62,7 +62,7 @@ function App() {
   }, [refreshDisplacementTaskState, user]);
 
   useEffect(() => {
-    const context = isLandslideLangtangRoute(pathname)
+    const context = isLandslideVisualizationRoute(pathname)
       ? resolveLangtangRouteContext(window.location.search)
       : null;
     if (!user || !context || (context.mode === 'static-langtang' && isLangtangExplorerEnabled())) {
@@ -83,6 +83,14 @@ function App() {
     });
     return () => { active = false; };
   }, [pathname, user]);
+
+  useEffect(() => {
+    if (!isLandslideLangtangRoute(pathname) || new URLSearchParams(window.location.search).get('mode') !== 'job') return;
+    const canonicalUrl = `${LANDSLIDE_RESULT_PATH}${window.location.search}${window.location.hash}`;
+    window.history.replaceState({}, '', canonicalUrl);
+    pathnameRef.current = LANDSLIDE_RESULT_PATH;
+    setPathname(LANDSLIDE_RESULT_PATH);
+  }, [pathname]);
 
   useEffect(() => {
     // The account task may continue while the user visits Home. Only the map
@@ -189,7 +197,7 @@ function App() {
       );
     }
 
-    if (isLandslideLangtangRoute(pathname)) {
+    if (isLandslideVisualizationRoute(pathname)) {
       const viewerContext = resolveLangtangRouteContext(window.location.search);
       const flagEnabled = isLangtangExplorerEnabled();
       const contextVerified = viewerContext !== null

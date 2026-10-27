@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isLandslideLangtangRoute, isLandslideResultsRoute, isLandslideRoute, navigatePath, normalizePathname } from './routing';
+import { isLandslideLangtangRoute, isLandslideResultRoute, isLandslideResultsRoute, isLandslideRoute, isLandslideVisualizationRoute, navigatePath, normalizePathname } from './routing';
 
 describe('client-side route recognition', () => {
   it('normalizes query strings and hashes without changing the route', () => {
@@ -15,6 +15,9 @@ describe('client-side route recognition', () => {
     expect(isLandslideResultsRoute('/landslide')).toBe(false);
     expect(isLandslideLangtangRoute('/landslide/langtang?source=map')).toBe(true);
     expect(isLandslideLangtangRoute('/landslide')).toBe(false);
+    expect(isLandslideResultRoute('/landslide/result?mode=job')).toBe(true);
+    expect(isLandslideVisualizationRoute('/landslide/result?mode=job')).toBe(true);
+    expect(isLandslideVisualizationRoute('/landslide/langtang')).toBe(true);
     expect(isLandslideRoute('/')).toBe(false);
   });
 

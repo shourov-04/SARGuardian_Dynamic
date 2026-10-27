@@ -161,7 +161,7 @@ describe('displacement preparation route', () => {
 
     expect(html.match(/Download results/g)).toHaveLength(1);
     expect(html.match(/View Displaced Images/g)).toHaveLength(1);
-    expect(html).toContain('href="/landslide/langtang?');
+    expect(html).toContain('href="/landslide/result?');
     expect(html).toContain('mode=job');
     expect(html).toContain('job=7f3501a3-9d5c-4ff1-8f1c-6b99f90130f1');
     expect(html).toContain('return=%2Flandslide%2Fdisplacements');

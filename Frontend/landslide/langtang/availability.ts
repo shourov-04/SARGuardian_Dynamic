@@ -1,5 +1,5 @@
 import type { DisplacementJob } from '../../src/api/catalog';
-import { LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_LANGTANG_PATH } from '../../src/routing';
+import { LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_RESULT_PATH } from '../../src/routing';
 import { LANGTANG_DATASET } from './contract';
 
 type AvailableVisualization = {
@@ -82,7 +82,7 @@ export function visualizationForJob(job: DisplacementJob): VisualizationAvailabi
   });
   return {
     available: true,
-    href: `${LANDSLIDE_LANGTANG_PATH}?${query.toString()}`,
+    href: `${LANDSLIDE_RESULT_PATH}?${query.toString()}`,
     jobId: job.id,
     returnPath: LANDSLIDE_DISPLACEMENT_PATH,
   };
