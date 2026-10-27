@@ -26,6 +26,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 
+DEFAULT_AUTH_ATTEMPTS = 5
+
+
 def normal_name(value: str) -> str:
     """Normalize a public granule ID or a source filename, preserving the ID."""
     return re.sub(r"\.h5$", "", Path(value.strip()).name, flags=re.IGNORECASE)
@@ -211,7 +214,7 @@ def _sleep_before_retry(stage: str, attempt: int, detail: str) -> None:
 
 
 def build_authenticated_session_with_retry(
-    acquisition: Any, attempts: int = 2, *, force_credentials: bool = False
+    acquisition: Any, attempts: int = DEFAULT_AUTH_ATTEMPTS, *, force_credentials: bool = False
 ) -> Any:
     """Build a bearer-authenticated ASF session without the unrelated cookie flow."""
     token = os.environ.get("EARTHDATA_TOKEN", "").strip()

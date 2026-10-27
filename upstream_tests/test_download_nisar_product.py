@@ -366,6 +366,27 @@ def test_authenticated_session_can_be_configured_for_more_than_two_attempts(monk
     assert len(sleeps) == 3
 
 
+def test_authenticated_session_default_survives_a_short_endpoint_outage(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(download.time, "sleep", lambda seconds: sleeps.append(seconds))
+    session = FakeSession(head_response=FakeResponse(200, {"Content-Length": "123"}))
+
+    class FlakyAcquisition:
+        def __init__(self):
+            self.calls = 0
+
+        def build_session(self):
+            self.calls += 1
+            if self.calls < download.DEFAULT_AUTH_ATTEMPTS:
+                raise download.requests.exceptions.ConnectionError("temporary endpoint outage")
+            return session
+
+    acquisition = FlakyAcquisition()
+    assert download.build_authenticated_session_with_retry(acquisition) is session
+    assert acquisition.calls == 5
+    assert sleeps == [2, 4, 8, 16]
+
+
 def test_pre_generated_earthdata_user_token_bypasses_login_token_endpoint(monkeypatch, capsys):
     from types import SimpleNamespace
 
@@ -436,6 +457,49 @@ def test_username_password_exchange_installs_bearer_without_asf_cookie(monkeypat
     assert ("token", "issued-user-token") in calls
     assert "closed" in calls
     assert "username_password_bearer_token_exchange" in capsys.readouterr().err
+
+
+def test_username_password_exchange_uses_bounded_default_retries(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.delenv("EARTHDATA_TOKEN", raising=False)
+    monkeypatch.setenv("EARTHDATA_USERNAME", "user")
+    monkeypatch.setenv("EARTHDATA_PASSWORD", "password")
+    sleeps = []
+    attempts = []
+    monkeypatch.setattr(download.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    class TokenResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"access_token": "issued-user-token"}
+
+        def close(self):
+            return None
+
+    class FakeASFSession:
+        edl_host = "urs.earthdata.nasa.gov"
+
+        def post(self, _url, **_kwargs):
+            attempts.append(1)
+            if len(attempts) < download.DEFAULT_AUTH_ATTEMPTS:
+                raise download.requests.exceptions.ConnectionError("temporary endpoint outage")
+            return TokenResponse()
+
+        def _update_edl_token(self, _token):
+            return None
+
+    monkeypatch.setitem(
+        download.sys.modules,
+        "asf_search",
+        SimpleNamespace(ASFSession=FakeASFSession),
+    )
+
+    assert isinstance(download.build_authenticated_session_with_retry(object()), FakeASFSession)
+    assert len(attempts) == 5
+    assert sleeps == [2, 4, 8, 16]
 
 
 def test_user_token_is_sufficient_without_username_password(monkeypatch, tmp_path, capsys):
