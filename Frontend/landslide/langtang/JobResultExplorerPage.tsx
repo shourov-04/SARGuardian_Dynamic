@@ -5,6 +5,7 @@ import { configureGoogleMaps, importLibrary } from '../../src/googleMaps';
 import {
   loadJobResultBlob,
   parseJobResultPackage,
+  renderJobProductOverlaysResponsive,
   renderJobOverlayResponsive,
   sampleJobMeasurement,
   type JobPixelMeasurement,
@@ -74,7 +75,16 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
     void loadJobResultBlob(job, user).then((blob) => {
       if (active) setLoadingStage('Validating and decoding scientific rasters…');
       return parseJobResultPackage(blob, job);
+    }).then(async (loaded) => {
+      if (active) setLoadingStage('Preparing interactive map simulations...');
+      for (const product of loaded.products) {
+        const rendered = await renderJobProductOverlaysResponsive(product);
+        if (!active) return null;
+        for (const [band, dataUrl] of rendered) overlayCache.current.set(band, dataUrl);
+      }
+      return loaded;
     }).then((loaded) => {
+      if (!loaded) return;
       if (!active) return;
       setDataset(loaded);
       setSelectedProductId(loaded.products[0]?.id ?? '');

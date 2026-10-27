@@ -402,7 +402,7 @@ function inverseMercatorY(value: number): number {
 
 export function renderJobOverlay(product: JobRasterProduct, band: JobRasterBand): string {
   const { canvas, context, pixels } = createJobOverlayCanvas(product);
-  paintJobOverlayRows(product, band, pixels, 0, product.height);
+  paintJobOverlayRows(product, [{ band, pixels }], 0, product.height);
   context.putImageData(pixels, 0, 0);
   return canvas.toDataURL('image/png');
 }
@@ -421,10 +421,11 @@ function createJobOverlayCanvas(product: JobRasterProduct): {
   return { canvas, context, pixels };
 }
 
+type OverlayPaintTarget = { band: JobRasterBand; pixels: ImageData };
+
 function paintJobOverlayRows(
   product: JobRasterProduct,
-  band: JobRasterBand,
-  pixels: ImageData,
+  targets: OverlayPaintTarget[],
   startRow: number,
   endRow: number,
 ): void {
@@ -440,10 +441,15 @@ function paintJobOverlayRows(
       const sourceColumn = Math.floor((x - minX) / (maxX - minX) * product.width);
       const sourceRow = Math.floor((maxY - y) / (maxY - minY) * product.height);
       const output = (row * product.width + column) * 4;
-      const rgba = sourceColumn >= 0 && sourceRow >= 0 && sourceColumn < product.width && sourceRow < product.height
-        ? colorForJobValue(Number(band.values[sourceRow * product.width + sourceColumn]), band)
-        : [0, 0, 0, 0];
-      pixels.data.set(rgba, output);
+      const sourceIndex = sourceColumn >= 0 && sourceRow >= 0 && sourceColumn < product.width && sourceRow < product.height
+        ? sourceRow * product.width + sourceColumn
+        : -1;
+      for (const { band, pixels } of targets) {
+        const rgba = sourceIndex >= 0
+          ? colorForJobValue(Number(band.values[sourceIndex]), band)
+          : [0, 0, 0, 0];
+        pixels.data.set(rgba, output);
+      }
     }
   }
 }
@@ -456,11 +462,27 @@ export async function renderJobOverlayResponsive(product: JobRasterProduct, band
   const { canvas, context, pixels } = createJobOverlayCanvas(product);
   const rowsPerChunk = Math.max(1, Math.floor(200_000 / product.width));
   for (let startRow = 0; startRow < product.height; startRow += rowsPerChunk) {
-    paintJobOverlayRows(product, band, pixels, startRow, Math.min(product.height, startRow + rowsPerChunk));
+    paintJobOverlayRows(product, [{ band, pixels }], startRow, Math.min(product.height, startRow + rowsPerChunk));
     if (startRow + rowsPerChunk < product.height) await yieldBrowserTask();
   }
   context.putImageData(pixels, 0, 0);
   return canvas.toDataURL('image/png');
+}
+
+export async function renderJobProductOverlaysResponsive(product: JobRasterProduct): Promise<Map<JobRasterBand, string>> {
+  const renderTargets = product.bands.map((band) => ({ band, ...createJobOverlayCanvas(product) }));
+  const paintTargets = renderTargets.map(({ band, pixels }) => ({ band, pixels }));
+  const rowsPerChunk = Math.max(1, Math.floor(200_000 / product.width));
+  for (let startRow = 0; startRow < product.height; startRow += rowsPerChunk) {
+    paintJobOverlayRows(product, paintTargets, startRow, Math.min(product.height, startRow + rowsPerChunk));
+    if (startRow + rowsPerChunk < product.height) await yieldBrowserTask();
+  }
+  const rendered = new Map<JobRasterBand, string>();
+  for (const { band, canvas, context, pixels } of renderTargets) {
+    context.putImageData(pixels, 0, 0);
+    rendered.set(band, canvas.toDataURL('image/png'));
+  }
+  return rendered;
 }
 
 export function sampleJobMeasurement(product: JobRasterProduct, band: JobRasterBand, longitude: number, latitude: number): JobPixelMeasurement {
