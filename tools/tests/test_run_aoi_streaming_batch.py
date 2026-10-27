@@ -133,12 +133,12 @@ def test_manifest_rejects_duplicate_product_ids(tmp_path: Path) -> None:
         raise AssertionError("duplicate product IDs were accepted")
 
 
-def test_twenty_products_put_the_remainder_on_the_sixth_runner() -> None:
+def test_twenty_products_spread_the_remainder_across_runners() -> None:
     products = [{"id": f"GOFF-{index:03d}", "expected_source_bytes": 10} for index in range(1, 21)]
 
     shards = [batch.product_shard(products, index, 6) for index in range(6)]
 
-    assert [len(shard) for shard in shards] == [3, 3, 3, 3, 3, 5]
+    assert [len(shard) for shard in shards] == [4, 4, 3, 3, 3, 3]
     assert len({row["id"] for shard in shards for row in shard}) == 20
 
 
@@ -189,7 +189,7 @@ def test_sharded_batch_processes_and_validates_only_its_assigned_products(monkey
     assert summary["shard_count"] == 2
 
 
-def test_thirteen_mixed_size_products_use_four_runners_with_the_remainder_last() -> None:
+def test_thirteen_mixed_size_products_use_four_balanced_runners() -> None:
     products = [
         {"id": f"GOFF-{index:03d}", "expected_source_bytes": 1_100_000_000}
         for index in range(1, 6)
@@ -200,8 +200,20 @@ def test_thirteen_mixed_size_products_use_four_runners_with_the_remainder_last()
 
     shards = [batch.product_shard(products, index, 4) for index in range(4)]
 
-    assert [len(shard) for shard in shards] == [3, 3, 3, 4]
+    assert [len(shard) for shard in shards] == [4, 3, 3, 3]
     assert len({row["id"] for shard in shards for row in shard}) == 13
+
+
+def test_thirty_five_products_are_evenly_split_across_ten_runners() -> None:
+    products = [
+        {"id": f"GUNW-{index:03d}", "expected_source_bytes": 2_300_000_000}
+        for index in range(1, 36)
+    ]
+
+    shards = [batch.product_shard(products, index, 10) for index in range(10)]
+
+    assert [len(shard) for shard in shards] == [4, 4, 4, 4, 4, 3, 3, 3, 3, 3]
+    assert len({row["id"] for shard in shards for row in shard}) == 35
 
 
 def test_eighty_products_are_split_eight_per_ten_runners() -> None:
