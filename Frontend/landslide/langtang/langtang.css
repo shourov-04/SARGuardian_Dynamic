@@ -57,6 +57,11 @@
 .langtang-panel label { display: grid; gap: 7px; margin-top: 17px; color: #d8f3fa; font-size: 12px; font-weight: 750; }
 .langtang-panel select,
 .langtang-panel input[type='range'] { width: 100%; }
+.langtang-panel input[type='range'] {
+  cursor: ew-resize;
+  accent-color: #58eadf;
+  touch-action: pan-y;
+}
 .langtang-panel select {
   min-height: 40px;
   padding: 0 9px;

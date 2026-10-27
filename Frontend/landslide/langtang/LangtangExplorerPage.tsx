@@ -32,6 +32,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut,
   const mapRef = useRef<google.maps.Map | null>(null);
   const imageOverlay = useRef<google.maps.GroundOverlay | null>(null);
   const footprintOverlay = useRef<google.maps.Polygon | null>(null);
+  const opacityRef = useRef(72);
   const clickHandler = useRef<(longitude: number, latitude: number) => void>(() => {});
   const rasterCache = useMemo(() => new NumericRasterCache(), []);
   const [manifest, setManifest] = useState<LangtangManifest | null>(null);
@@ -44,6 +45,8 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut,
   const [measurement, setMeasurement] = useState<PixelMeasurement | null>(null);
   const [sampling, setSampling] = useState(false);
   const [samplingError, setSamplingError] = useState('');
+
+  opacityRef.current = opacity;
 
   const selectedProduct = manifest?.products.find((product) => product.id === selectedProductId) ?? null;
   const selectedBandDefinition = selectedProduct ? findBand(selectedProduct, selectedBand) : null;
@@ -113,18 +116,10 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut,
   }, [enabled]);
 
   useEffect(() => {
-    imageOverlay.current?.setMap(null);
-    imageOverlay.current = null;
     footprintOverlay.current?.setMap(null);
     footprintOverlay.current = null;
     const map = mapRef.current;
-    if (!mapReady || !map || !selectedProduct || !selectedBandDefinition) return;
-    const [west, south, east, north] = selectedBandDefinition.preview.bounds_wgs84;
-    imageOverlay.current = new google.maps.GroundOverlay(
-      resolveAssetUrl(manifestPath, selectedBandDefinition.preview.url),
-      { west, south, east, north },
-      { map, opacity: opacity / 100, clickable: false },
-    );
+    if (!mapReady || !map || !selectedProduct) return undefined;
     footprintOverlay.current = new google.maps.Polygon({
       map,
       paths: selectedProduct.footprint_wgs84.map(([lng, lat]) => ({ lng, lat })),
@@ -134,13 +129,33 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut,
       fillOpacity: 0,
       clickable: false,
     });
-    const bounds = new google.maps.LatLngBounds({ lat: south, lng: west }, { lat: north, lng: east });
-    map.fitBounds(bounds, 42);
+    return () => {
+      footprintOverlay.current?.setMap(null);
+      footprintOverlay.current = null;
+    };
+  }, [mapReady, selectedProduct]);
+
+  useEffect(() => {
+    imageOverlay.current?.setMap(null);
+    imageOverlay.current = null;
+    const map = mapRef.current;
+    if (!mapReady || !map || !selectedBandDefinition) return undefined;
+    const [west, south, east, north] = selectedBandDefinition.preview.bounds_wgs84;
+    imageOverlay.current = new google.maps.GroundOverlay(
+      resolveAssetUrl(manifestPath, selectedBandDefinition.preview.url),
+      { west, south, east, north },
+      { map, opacity: opacityRef.current / 100, clickable: false },
+    );
+    map.fitBounds(new google.maps.LatLngBounds({ lat: south, lng: west }, { lat: north, lng: east }), 42);
     return () => {
       imageOverlay.current?.setMap(null);
-      footprintOverlay.current?.setMap(null);
+      imageOverlay.current = null;
     };
-  }, [manifestPath, mapReady, opacity, selectedBandDefinition, selectedProduct]);
+  }, [manifestPath, mapReady, selectedBandDefinition]);
+
+  useEffect(() => {
+    imageOverlay.current?.setOpacity(opacity / 100);
+  }, [opacity]);
 
   clickHandler.current = (longitude, latitude) => {
     if (!selectedProduct) return;
@@ -206,7 +221,7 @@ export function LangtangExplorerPage({ enabled, user, onHome, onBack, onSignOut,
           </select>
         </label>
         <label>Overlay opacity <strong>{opacity}%</strong>
-          <input type="range" min="10" max="100" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
+          <input type="range" min="10" max="100" step="1" value={opacity} onInput={(event) => setOpacity(Number(event.currentTarget.value))} />
         </label>
 
         <section className="langtang-legend" aria-label="Map legend">

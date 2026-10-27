@@ -401,17 +401,38 @@ function inverseMercatorY(value: number): number {
 }
 
 export function renderJobOverlay(product: JobRasterProduct, band: JobRasterBand): string {
+  const { canvas, context, pixels } = createJobOverlayCanvas(product);
+  paintJobOverlayRows(product, band, pixels, 0, product.height);
+  context.putImageData(pixels, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+function createJobOverlayCanvas(product: JobRasterProduct): {
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
+  pixels: ImageData;
+} {
   const canvas = document.createElement('canvas');
   canvas.width = product.width;
   canvas.height = product.height;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('The browser cannot render the result overlay.');
   const pixels = context.createImageData(product.width, product.height);
+  return { canvas, context, pixels };
+}
+
+function paintJobOverlayRows(
+  product: JobRasterProduct,
+  band: JobRasterBand,
+  pixels: ImageData,
+  startRow: number,
+  endRow: number,
+): void {
   const [west, south, east, north] = product.boundsWgs84;
   const northY = mercatorY(north);
   const southY = mercatorY(south);
   const [minX, minY, maxX, maxY] = product.boundsNative;
-  for (let row = 0; row < product.height; row += 1) {
+  for (let row = startRow; row < endRow; row += 1) {
     const latitude = inverseMercatorY(northY + (southY - northY) * ((row + 0.5) / product.height));
     for (let column = 0; column < product.width; column += 1) {
       const longitude = west + (east - west) * ((column + 0.5) / product.width);
@@ -424,6 +445,19 @@ export function renderJobOverlay(product: JobRasterProduct, band: JobRasterBand)
         : [0, 0, 0, 0];
       pixels.data.set(rgba, output);
     }
+  }
+}
+
+function yieldBrowserTask(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+export async function renderJobOverlayResponsive(product: JobRasterProduct, band: JobRasterBand): Promise<string> {
+  const { canvas, context, pixels } = createJobOverlayCanvas(product);
+  const rowsPerChunk = Math.max(1, Math.floor(200_000 / product.width));
+  for (let startRow = 0; startRow < product.height; startRow += rowsPerChunk) {
+    paintJobOverlayRows(product, band, pixels, startRow, Math.min(product.height, startRow + rowsPerChunk));
+    if (startRow + rowsPerChunk < product.height) await yieldBrowserTask();
   }
   context.putImageData(pixels, 0, 0);
   return canvas.toDataURL('image/png');

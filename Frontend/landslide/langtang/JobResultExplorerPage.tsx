@@ -5,9 +5,10 @@ import { configureGoogleMaps, importLibrary } from '../../src/googleMaps';
 import {
   loadJobResultBlob,
   parseJobResultPackage,
-  renderJobOverlay,
+  renderJobOverlayResponsive,
   sampleJobMeasurement,
   type JobPixelMeasurement,
+  type JobRasterBand,
   type JobRasterDataset,
 } from './jobResultData';
 import './langtang.css';
@@ -46,6 +47,8 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
   const aoiOverlay = useRef<google.maps.Polygon | null>(null);
   const imageOverlay = useRef<google.maps.GroundOverlay | null>(null);
   const footprintOverlay = useRef<google.maps.Polygon | null>(null);
+  const overlayCache = useRef(new WeakMap<JobRasterBand, string>());
+  const opacityRef = useRef(88);
   const clickHandler = useRef<(longitude: number, latitude: number) => void>(() => {});
   const [dataset, setDataset] = useState<JobRasterDataset | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -57,6 +60,8 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
   const [opacity, setOpacity] = useState(88);
   const [measurement, setMeasurement] = useState<JobPixelMeasurement | null>(null);
   const [rendering, setRendering] = useState(false);
+
+  opacityRef.current = opacity;
 
   const selectedProduct = dataset?.products.find((product) => product.id === selectedProductId) ?? null;
   const selectedBand = selectedProduct?.bands.find((band) => band.key === selectedBandKey) ?? null;
@@ -142,48 +147,67 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
   }, [dataset, mapReady]);
 
   useEffect(() => {
-    imageOverlay.current?.setMap(null);
-    imageOverlay.current = null;
     footprintOverlay.current?.setMap(null);
     footprintOverlay.current = null;
+    const map = mapRef.current;
+    if (!mapReady || !map || !selectedProduct) return undefined;
+    const [west, south, east, north] = selectedProduct.boundsWgs84;
+    footprintOverlay.current = new google.maps.Polygon({
+      map,
+      paths: selectedProduct.footprintWgs84.map(([longitude, latitude]) => ({ lng: longitude, lat: latitude })),
+      strokeColor: '#ffd37a',
+      strokeOpacity: 0.95,
+      strokeWeight: 1.5,
+      fillOpacity: 0,
+      clickable: false,
+    });
+    map.fitBounds(new google.maps.LatLngBounds({ lat: south, lng: west }, { lat: north, lng: east }), 42);
+    return () => {
+      footprintOverlay.current?.setMap(null);
+      footprintOverlay.current = null;
+    };
+  }, [mapReady, selectedProduct]);
+
+  useEffect(() => {
+    imageOverlay.current?.setMap(null);
+    imageOverlay.current = null;
     const map = mapRef.current;
     if (!mapReady || !map || !selectedProduct || !selectedBand) return undefined;
     let active = true;
     setRendering(true);
-    const timer = window.setTimeout(() => {
+    const renderOverlay = async () => {
       try {
-        const dataUrl = renderJobOverlay(selectedProduct, selectedBand);
+        let dataUrl = overlayCache.current.get(selectedBand);
+        if (!dataUrl) {
+          dataUrl = await renderJobOverlayResponsive(selectedProduct, selectedBand);
+          overlayCache.current.set(selectedBand, dataUrl);
+        }
         if (!active) return;
         const [west, south, east, north] = selectedProduct.boundsWgs84;
         imageOverlay.current = new google.maps.GroundOverlay(
           dataUrl,
           { west, south, east, north },
-          { map, opacity: opacity / 100, clickable: false },
+          { map, opacity: opacityRef.current / 100, clickable: false },
         );
-        footprintOverlay.current = new google.maps.Polygon({
-          map,
-          paths: selectedProduct.footprintWgs84.map(([longitude, latitude]) => ({ lng: longitude, lat: latitude })),
-          strokeColor: '#ffd37a',
-          strokeOpacity: 0.95,
-          strokeWeight: 1.5,
-          fillOpacity: 0,
-          clickable: false,
-        });
-        map.fitBounds(new google.maps.LatLngBounds({ lat: south, lng: west }, { lat: north, lng: east }), 42);
         setLoadError('');
       } catch (error) {
         if (active) setLoadError(error instanceof Error ? error.message : 'The selected raster could not be rendered.');
       } finally {
         if (active) setRendering(false);
       }
-    }, 0);
+    };
+    const timer = window.setTimeout(() => { void renderOverlay(); }, 0);
     return () => {
       active = false;
       window.clearTimeout(timer);
       imageOverlay.current?.setMap(null);
-      footprintOverlay.current?.setMap(null);
+      imageOverlay.current = null;
     };
-  }, [mapReady, opacity, selectedBand, selectedProduct]);
+  }, [mapReady, selectedBand, selectedProduct]);
+
+  useEffect(() => {
+    imageOverlay.current?.setOpacity(opacity / 100);
+  }, [opacity]);
 
   clickHandler.current = (longitude, latitude) => {
     if (!selectedProduct || !selectedBand) return;
@@ -228,7 +252,7 @@ export function JobResultExplorerPage({ job, user, onHome, onBack, onSignOut }: 
           </select>
         </label>
         <label>Overlay opacity <strong>{opacity}%</strong>
-          <input type="range" min="10" max="100" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} />
+          <input type="range" min="10" max="100" step="1" value={opacity} onInput={(event) => setOpacity(Number(event.currentTarget.value))} />
         </label>
 
         <section className="langtang-legend" aria-label="Map legend">
