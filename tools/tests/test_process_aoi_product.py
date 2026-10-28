@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import sys
@@ -10,6 +11,26 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import process_aoi_product as product_module
+
+
+def write_zero_valid_goff_export(path: Path, source: str) -> None:
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        path, "w", driver="GTiff", height=3, width=4, count=3,
+        dtype="float32", crs="EPSG:32645", transform=from_origin(1, 4, 1, 1),
+        nodata=np.nan,
+    ) as dataset:
+        for index in range(1, 4):
+            dataset.write(np.full((3, 4), np.nan, dtype="float32"), index)
+        dataset.update_tags(
+            source=source, layer="HH/layer2", reference="20260826", secondary="20260907",
+            maturity="PROVISIONAL", crid="P05023", export_status="NO_VALID_PIXELS",
+            valid_pixel_count="0",
+        )
 
 
 def args(tmp_path: Path, *, execution_label: str = "initial") -> SimpleNamespace:
@@ -114,3 +135,33 @@ def test_retry_reuses_only_a_raw_file_matching_its_download_manifest(tmp_path: P
     assert pipeline.raw_path == raw
     assert pipeline.same_source is True
     assert pipeline.outcomes["download"] == "success"
+
+
+def test_zero_valid_goff_export_gets_an_explicit_non_measurement_stats_row(tmp_path: Path) -> None:
+    source = "NISAR_L2_PR_GOFF_example_1234567890.h5"
+    raw = tmp_path / source
+    raw.write_bytes(b"hdf5-placeholder")
+    export = tmp_path / "export" / "GOFF_20260826_20260907_PR_HH-layer2.tif"
+    write_zero_valid_goff_export(export, source)
+    preflight = tmp_path / "preflight.json"
+    write_json(preflight, {
+        "grid_checks": [{
+            "group": "science/LSAR/GOFF/grids/frequencyA/pixelOffsets/HH/layer2",
+            "grid_pixels_inside_aoi": 155853,
+        }],
+    })
+    stats = tmp_path / "goff.csv"
+
+    assert product_module._write_no_valid_goff_stats(
+        raw_path=raw, export_dir=export.parent, stats_path=stats,
+        preflight_path=preflight, maturity="PROVISIONAL",
+    ) is True
+    with stats.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["file"] == source
+    assert rows[0]["layer"] == "HH/layer2"
+    assert rows[0]["valid_px"] == "0"
+    assert rows[0]["aoi_px"] == "155853"
+    assert rows[0]["export_status"] == "NO_VALID_PIXELS"
+    assert rows[0]["range_median_mm"] == ""

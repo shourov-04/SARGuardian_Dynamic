@@ -16,6 +16,7 @@ from tools.run_export_science_diagnostics import (
     write_target_log,
 )
 from tools.run_pixel_stack_inventory import run_inventory
+from tools.run_pixel_stack_inventory import geometry_partition
 
 
 def test_export_identity_extracts_dates_and_processing_type():
@@ -77,6 +78,15 @@ def test_pixel_stack_adapter_passes_every_distinct_path_to_pinned_engine(tmp_pat
     assert run_inventory(engine, files, "all") == 0
     assert parsed == sorted(files)
     assert cross_checks == [{}]
+
+
+def test_pixel_stack_partitions_adjacent_frames_that_use_different_crs():
+    assert geometry_partition(
+        "NISAR_L2_PR_GUNW_028_069_A_015_029_4000_SH_example.h5", "A069"
+    ) == "A069-F015"
+    assert geometry_partition(
+        "NISAR_L2_PR_GUNW_028_069_A_016_029_4000_SH_example.h5", "A069"
+    ) == "A069-F016"
 
 
 def test_diagnostics_accept_duplicate_basenames_without_dropping_inputs(monkeypatch, tmp_path: Path):

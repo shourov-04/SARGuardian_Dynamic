@@ -117,7 +117,7 @@ def test_recovery_batch_continues_after_a_product_still_fails(monkeypatch, tmp_p
     assert summary["unprocessed_product_ids"] == []
 
 
-def test_live_primary_publishes_failure_and_moves_to_next_product_without_local_retry(
+def test_live_primary_retries_twice_then_publishes_failure_and_moves_to_next_product(
     monkeypatch, tmp_path: Path,
 ) -> None:
     manifest_path = tmp_path / "manifest.json"
@@ -156,7 +156,7 @@ def test_live_primary_publishes_failure_and_moves_to_next_product_without_local_
     ])
 
     assert batch.main() == 1
-    assert calls == ["GUNW-001", "GOFF-002"]
+    assert calls == ["GUNW-001", "GUNW-001", "GOFF-002"]
     assert published == ["GUNW-001"]
 
 

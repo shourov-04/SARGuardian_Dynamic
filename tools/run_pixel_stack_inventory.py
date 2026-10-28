@@ -11,12 +11,31 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 
 WINTER_MONTHS = (11, 12, 1, 2, 3)
+
+
+def geometry_partition(source: str, fallback: str) -> str:
+    """Keep adjacent NISAR frame/subswath grids out of the same time chain."""
+    match = re.search(r"_GUNW_\d+_(\d+)_([AD])_(\d+)_", source)
+    if not match:
+        return fallback
+    return f"{match.group(2)}{int(match.group(1)):03d}-F{int(match.group(3)):03d}"
+
+
+def partition_raster_geometry(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        import rasterio
+        with rasterio.open(row["path"]) as dataset:
+            source = dataset.tags().get("source", "")
+        return {**row, "geom": geometry_partition(source, str(row.get("geom", "?")))}
+    except Exception:
+        return row
 
 
 def load_inventory(path: Path) -> list[Path]:
@@ -38,7 +57,8 @@ def load_inventory(path: Path) -> list[Path]:
 
 
 def run_inventory(pixel_stack: Any, files: list[Path], season: str) -> int:
-    rasters = [row for row in (pixel_stack.parse_export(path) for path in sorted(files)) if row]
+    rasters = [partition_raster_geometry(row) for row in
+               (pixel_stack.parse_export(path) for path in sorted(files)) if row]
     rasters = [row for row in rasters if row["proc"] == "PR"]
     if season != "all":
         want_winter = season == "winter"

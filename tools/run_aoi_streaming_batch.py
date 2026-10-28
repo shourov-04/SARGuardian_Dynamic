@@ -183,26 +183,25 @@ def main() -> int:
         result = subprocess.run(command, env=environment, check=False)
         print("::endgroup::", flush=True)
         if result.returncode:
-            # A live primary workflow delegates the retry to the dedicated 11th
-            # runner immediately. Local/non-live callers retain the bounded
-            # same-run retry behavior.
-            if not args.publish_failure_signals:
-                first_plan = plan(shard_manifest, args.checkpoint_root / "products", args.checkpoint_root / "cleanups")
-                decision = next(row for row in first_plan["decisions"] if row["product_id"] == product_id)
-                if decision["status"] == "RETRY":
-                    prior = args.checkpoint_root / "prior" / f"sarguardian-granule-{product_id}"
-                    current = args.checkpoint_root / "products" / f"sarguardian-granule-{product_id}"
-                    if prior.exists():
-                        shutil.rmtree(prior)
-                    if current.exists():
-                        shutil.copytree(current, prior)
-                    retry_command = command[:-2] + ["--execution-label", "retry-1", "--prior-checkpoint", str(prior)]
-                    print(
-                        f"BATCH_PRODUCT_RETRY product_id={product_id} attempt=2/2 "
-                        f"reasons={','.join(decision['reasons'])}",
-                        flush=True,
-                    )
-                    result = subprocess.run(retry_command, env=environment, check=False)
+            # Every primary runner gets exactly two bounded attempts.  The live
+            # failure queue is published only if the second primary attempt also
+            # fails, so runner 11 never duplicates a retry already in progress.
+            first_plan = plan(shard_manifest, args.checkpoint_root / "products", args.checkpoint_root / "cleanups")
+            decision = next(row for row in first_plan["decisions"] if row["product_id"] == product_id)
+            if decision["status"] == "RETRY":
+                prior = args.checkpoint_root / "prior" / f"sarguardian-granule-{product_id}"
+                current = args.checkpoint_root / "products" / f"sarguardian-granule-{product_id}"
+                if prior.exists():
+                    shutil.rmtree(prior)
+                if current.exists():
+                    shutil.copytree(current, prior)
+                retry_command = command[:-2] + ["--execution-label", "retry-1", "--prior-checkpoint", str(prior)]
+                print(
+                    f"BATCH_PRODUCT_RETRY product_id={product_id} attempt=2/2 "
+                    f"reasons={','.join(decision['reasons'])}",
+                    flush=True,
+                )
+                result = subprocess.run(retry_command, env=environment, check=False)
             if result.returncode:
                 if failed is None:
                     failed = product_id

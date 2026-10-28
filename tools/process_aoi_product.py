@@ -111,6 +111,80 @@ def _hdf5_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() == ".h5")
 
 
+def _write_no_valid_goff_stats(
+    *, raw_path: Path, export_dir: Path, stats_path: Path,
+    preflight_path: Path, maturity: str,
+) -> bool:
+    """Preserve a valid zero-pixel GOFF result instead of treating it as a crash.
+
+    The pinned GOFF reader intentionally exports an AOI raster tagged
+    ``NO_VALID_PIXELS`` when every AOI cell fails its correlation/SNR gates, but
+    it emits no CSV row in that case.  The orchestration contract requires one
+    explicit row per product, so write that row only after independently
+    confirming that the layer2 export exists and contains no valid band-1
+    pixels.  Reader exceptions and missing exports remain hard failures.
+    """
+    try:
+        import numpy as np
+        import rasterio
+    except ImportError:
+        return False
+
+    candidates = sorted(export_dir.glob("*.tif"))
+    records: list[dict[str, object]] = []
+    for path in candidates:
+        with rasterio.open(path) as dataset:
+            tags = dataset.tags()
+            layer = tags.get("layer", "")
+            if "layer2" not in layer.lower():
+                continue
+            band = dataset.read(1, masked=True)
+            valid = ~np.ma.getmaskarray(band) & np.isfinite(band.filled(np.nan))
+            if (
+                tags.get("export_status") != "NO_VALID_PIXELS"
+                or tags.get("valid_pixel_count") != "0"
+                or int(np.count_nonzero(valid)) != 0
+                or _canonical_granule(tags.get("source")) != _canonical_granule(raw_path.name)
+            ):
+                return False
+            records.append({
+                "file": raw_path.name,
+                "layer": layer,
+                "reference": tags.get("reference", ""),
+                "secondary": tags.get("secondary", ""),
+                "valid_px": 0,
+                "frame_px": dataset.width * dataset.height,
+                "frame_pct": 0,
+                "track": "",
+                "maturity": tags.get("maturity") or maturity,
+                "crid": tags.get("crid", ""),
+                "processing": "UR" if "_UR_" in raw_path.name else "PR",
+                "export_status": "NO_VALID_PIXELS",
+                "range_median_mm": "",
+            })
+    if len(records) != 1:
+        return False
+
+    try:
+        preflight = _read_json(preflight_path)
+        layer_group = str(records[0]["layer"]).lower()
+        matches = [
+            row for row in preflight.get("grid_checks", [])
+            if isinstance(row, dict) and str(row.get("group", "")).lower().endswith(layer_group)
+        ]
+        records[0]["aoi_px"] = int(matches[0]["grid_pixels_inside_aoi"]) if len(matches) == 1 else ""
+    except (ProductPipelineError, KeyError, TypeError, ValueError):
+        records[0]["aoi_px"] = ""
+
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    fields = list(records[0])
+    with stats_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(records)
+    return True
+
+
 class ProductPipeline:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -366,11 +440,27 @@ class ProductPipeline:
                 "--layer", "layer2", "--csv", str(self.stats_path), "--export", str(export_dir),
             ]
         export_dir.mkdir(parents=True, exist_ok=True)
+        reader_log = self.curated / "reader.log"
         try:
-            _run(command)
+            _run(command, log_path=reader_log)
         except ProductPipelineError:
             self.outcomes["reader"] = "failure"
             raise
+        if (
+            product.product_type == "GOFF"
+            and (not self.stats_path.is_file() or self.stats_path.stat().st_size <= 0)
+            and _write_no_valid_goff_stats(
+                raw_path=self.raw_path,
+                export_dir=export_dir,
+                stats_path=self.stats_path,
+                preflight_path=self.curated / "preflight-report.json",
+                maturity=product.maturity,
+            )
+        ):
+            log(
+                f"GOFF_NO_VALID_SCIENCE_PIXELS product_id={product.product_id} "
+                "quality_gates=correlation_and_snr status=PRESERVED"
+            )
         if not self.stats_path.is_file() or self.stats_path.stat().st_size <= 0:
             self.outcomes["reader"] = "failure"
             raise ProductPipelineError("Science reader did not produce its statistics CSV.")
@@ -561,6 +651,10 @@ class ProductPipeline:
                 line = raw_line.strip()
                 if line.startswith(prefixes):
                     lines.append(line[:420])
+        reader_tail: list[str] = []
+        reader_log = self.curated / "reader.log"
+        if reader_log.is_file():
+            reader_tail = reader_log.read_text(encoding="utf-8", errors="replace").splitlines()[-24:]
         record = {
             "schema_version": "sarguardian-product-run-diagnostic/1.0",
             "product_id": self.product.product_id,
@@ -572,6 +666,7 @@ class ProductPipeline:
             "step_outcomes": self.outcomes,
             "download_error_code": next((line for line in lines if line.startswith("ERROR=")), None),
             "download_diagnostics": lines[:16],
+            "reader_log_tail": [line[:600] for line in reader_tail],
             "download_manifest_created": (self.curated / "download-manifest.json").is_file(),
             "raw_hdf5_present_at_diagnostic_time": bool(_hdf5_files(self.raw_dir)),
             "retained_archive_created": any(self.archive_dir.glob("*.science.h5")),
@@ -593,6 +688,7 @@ class ProductPipeline:
             "product-run-diagnostics.json", "product-processing.json", "reader-equivalence.json",
             "derived-output-validation.json", "source-inventory.json", "preflight-report.json",
             "download-manifest.json", "drive-retention-receipt.json", "drive-metadata-upload-receipt.json",
+            "reader.log",
         )
         for name in names:
             _copy_if_present(self.curated / name, destination / name)
