@@ -244,7 +244,6 @@ jobs:
       GOOGLE_DRIVE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_JSON }}
       GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
       GOOGLE_DRIVE_PARENT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PARENT_FOLDER_ID || secrets.GOOGLE_DRIVE_FOLDER_ID }}
-      NODE_PATH: ${{ runner.temp }}/sarguardian-artifact-client/node_modules
     steps:
       - name: Checkout orchestration code at the manifest revision
         uses: actions/checkout@v4
@@ -288,6 +287,7 @@ jobs:
           python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r tools/requirements-retention.txt
           npm --prefix "$RUNNER_TEMP/sarguardian-artifact-client" install \
             --no-audit --no-fund --save-exact @actions/artifact@2.3.2
+          echo "NODE_PATH=$RUNNER_TEMP/sarguardian-artifact-client/node_modules" >> "$GITHUB_ENV"
 
       - name: Download the exact AOI run manifest
         uses: actions/download-artifact@v4
