@@ -66,7 +66,10 @@ async function resultPackage(): Promise<Blob> {
 
 describe('task result raster package', () => {
   it('decodes a verified package and preserves valid zero versus NaN cells', async () => {
-    const dataset = await parseJobResultPackage(await resultPackage(), job());
+    const progress: string[] = [];
+    let browserTaskRan = false;
+    setTimeout(() => { browserTaskRan = true; }, 0);
+    const dataset = await parseJobResultPackage(await resultPackage(), job(), (message) => progress.push(message));
     expect(dataset.products).toHaveLength(2);
     expect(dataset.products.map((product) => product.id)).toEqual(['GOFF-COMBINED', 'GUNW-COMBINED']);
     const product = dataset.products[0];
@@ -84,6 +87,9 @@ describe('task result raster package', () => {
     const medianValue = sampleJobMeasurement(product, product.bands[0], 85.005, 28.985);
     expect(medianValue).toMatchObject({ valid: true, value: 3, column: 0, row: 1 });
     expect(medianValue.quality).toBeCloseTo(0.6, 5);
+    expect(progress).toContain('Decoding scientific raster 1 of 3...');
+    expect(progress.some((message) => message.startsWith('Combining GOFF rasters'))).toBe(true);
+    expect(browserTaskRan).toBe(true);
   });
 
   it('rejects a package whose task provenance does not match', async () => {

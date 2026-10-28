@@ -64,7 +64,15 @@ type ResultArtifact = { index: number; bytes: number; sha256: string };
 const MAX_PACKAGE_BYTES = 250 * 1024 * 1024;
 const MAX_RASTER_BYTES = 32 * 1024 * 1024;
 const MAX_PRODUCTS = 100;
+// A browser map cannot display more useful detail than roughly one million
+// screen pixels at once. Keeping the combined display grid at that scale
+// prevents a large AOI from allocating hundreds of megabytes of canvas/data.
+const MAX_COMBINED_PIXELS = 1_000_000;
+const MAX_PERCENTILE_SAMPLES = 50_000;
+const RESPONSIVE_PIXEL_CHUNK = 20_000;
 const SHA256 = /^[a-f0-9]{64}$/;
+
+export type JobResultProgress = (message: string) => void;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -133,9 +141,18 @@ function projectionForEpsg(epsg: number): string {
 
 function finitePercentile(values: TypedArray, percentile: number): number {
   const finite: number[] = [];
-  for (let index = 0; index < values.length; index += 1) {
+  const stride = Math.max(1, Math.floor(values.length / MAX_PERCENTILE_SAMPLES));
+  for (let index = 0; index < values.length; index += stride) {
     const value = Number(values[index]);
     if (Number.isFinite(value)) finite.push(Math.abs(value));
+  }
+  // A sparse raster can miss every regularly sampled cell. Fall back to a
+  // bounded collection of finite values without retaining the whole raster.
+  if (!finite.length && stride > 1) {
+    for (let index = 0; index < values.length && finite.length < MAX_PERCENTILE_SAMPLES; index += 1) {
+      const value = Number(values[index]);
+      if (Number.isFinite(value)) finite.push(Math.abs(value));
+    }
   }
   if (!finite.length) return 1;
   finite.sort((a, b) => a - b);
@@ -148,7 +165,11 @@ function datesFromName(name: string): [string, string] {
   return match ? [format(match[1]), format(match[2])] : ['Unknown', 'Unknown'];
 }
 
-function bandDefinitions(family: 'GUNW' | 'GOFF', rasters: TypedArray[]): JobRasterBand[] {
+function bandDefinitions(
+  family: 'GUNW' | 'GOFF',
+  rasters: TypedArray[],
+  calculateDisplayRange = true,
+): JobRasterBand[] {
   const expected = family === 'GUNW'
     ? [
       { key: 'displacement' as const, label: 'LOS displacement', unit: 'mm' as const },
@@ -161,7 +182,9 @@ function bandDefinitions(family: 'GUNW' | 'GOFF', rasters: TypedArray[]): JobRas
     ];
   if (rasters.length !== expected.length) throw new Error(`${family} result raster has an unexpected band count.`);
   return expected.map((definition, index) => {
-    const clip = definition.unit === 'unitless' ? 1 : finitePercentile(rasters[index], 0.98);
+    const clip = definition.unit === 'unitless' || !calculateDisplayRange
+      ? 1
+      : finitePercentile(rasters[index], 0.98);
     return {
       sourceBand: index + 1,
       ...definition,
@@ -191,19 +214,40 @@ function combinedDate(products: JobRasterProduct[], key: 'referenceDate' | 'seco
   return dates[latest ? dates.length - 1 : 0];
 }
 
-function sampleNativeBand(product: JobRasterProduct, bandKey: JobBandKey, x: number, y: number, projection: string): number {
-  const [sourceX, sourceY] = projection === product.projection
-    ? [x, y]
-    : proj4(projection, product.projection, [x, y]);
-  const [minX, minY, maxX, maxY] = product.boundsNative;
-  const column = Math.floor((sourceX - minX) / (maxX - minX) * product.width);
-  const row = Math.floor((maxY - sourceY) / (maxY - minY) * product.height);
-  if (column < 0 || row < 0 || column >= product.width || row >= product.height) return Number.NaN;
-  const band = product.bands.find((candidate) => candidate.key === bandKey);
-  return band ? Number(band.values[row * product.width + column]) : Number.NaN;
+type PreparedSource = {
+  product: JobRasterProduct;
+  bandValues: TypedArray[];
+  columnScale: number;
+  rowScale: number;
+};
+
+function boundedGrid(width: number, height: number): [number, number] {
+  if (width * height <= MAX_COMBINED_PIXELS) return [width, height];
+  const scale = Math.sqrt(MAX_COMBINED_PIXELS / (width * height));
+  return [Math.max(1, Math.floor(width * scale)), Math.max(1, Math.floor(height * scale))];
 }
 
-export function combineJobProducts(products: JobRasterProduct[]): JobRasterProduct[] {
+function samplePreparedSource(
+  source: PreparedSource,
+  sourceX: number,
+  sourceY: number,
+  buckets: number[][],
+): void {
+  const [minX, , , maxY] = source.product.boundsNative;
+  const column = Math.floor((sourceX - minX) * source.columnScale);
+  const row = Math.floor((maxY - sourceY) * source.rowScale);
+  if (column < 0 || row < 0 || column >= source.product.width || row >= source.product.height) return;
+  const index = row * source.product.width + column;
+  for (let bandIndex = 0; bandIndex < source.bandValues.length; bandIndex += 1) {
+    const value = Number(source.bandValues[bandIndex][index]);
+    if (Number.isFinite(value)) buckets[bandIndex].push(value);
+  }
+}
+
+export async function combineJobProducts(
+  products: JobRasterProduct[],
+  onProgress?: JobResultProgress,
+): Promise<JobRasterProduct[]> {
   const combined: JobRasterProduct[] = [];
   for (const family of ['GOFF', 'GUNW'] as const) {
     const sources = products.filter((product) => product.family === family);
@@ -222,11 +266,12 @@ export function combineJobProducts(products: JobRasterProduct[]): JobRasterProdu
     ];
     const referenceResolutionX = (reference.boundsNative[2] - reference.boundsNative[0]) / reference.width;
     const referenceResolutionY = (reference.boundsNative[3] - reference.boundsNative[1]) / reference.height;
-    const width = Math.max(1, Math.ceil((boundsNative[2] - boundsNative[0]) / referenceResolutionX));
-    const height = Math.max(1, Math.ceil((boundsNative[3] - boundsNative[1]) / referenceResolutionY));
-    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width * height > 10_000_000) {
+    const nativeWidth = Math.max(1, Math.ceil((boundsNative[2] - boundsNative[0]) / referenceResolutionX));
+    const nativeHeight = Math.max(1, Math.ceil((boundsNative[3] - boundsNative[1]) / referenceResolutionY));
+    if (!Number.isSafeInteger(nativeWidth) || !Number.isSafeInteger(nativeHeight)) {
       throw new Error(`${family} combined visualization grid is too large.`);
     }
+    const [width, height] = boundedGrid(nativeWidth, nativeHeight);
     const expectedBands = reference.bands.map(({ key, label, unit }) => ({ key, label, unit }));
     if (sources.some((product) => expectedBands.some((band) => !product.bands.some((candidate) => (
       candidate.key === band.key && candidate.unit === band.unit
@@ -234,19 +279,49 @@ export function combineJobProducts(products: JobRasterProduct[]): JobRasterProdu
       throw new Error(`${family} result rasters do not have a consistent band inventory.`);
     }
     const combinedValues = expectedBands.map(() => new Float32Array(width * height).fill(Number.NaN));
+    const preparedByProjection = new Map<string, PreparedSource[]>();
+    for (const product of sources) {
+      const bandValues = expectedBands.map((band) => {
+        const match = product.bands.find((candidate) => candidate.key === band.key && candidate.unit === band.unit);
+        if (!match) throw new Error(`${family} result rasters do not have a consistent band inventory.`);
+        return match.values;
+      });
+      const [sourceMinX, sourceMinY, sourceMaxX, sourceMaxY] = product.boundsNative;
+      const prepared: PreparedSource = {
+        product,
+        bandValues,
+        columnScale: product.width / (sourceMaxX - sourceMinX),
+        rowScale: product.height / (sourceMaxY - sourceMinY),
+      };
+      const group = preparedByProjection.get(product.projection) ?? [];
+      group.push(prepared);
+      preparedByProjection.set(product.projection, group);
+    }
     const [minX, minY, maxX, maxY] = boundsNative;
+    const xCoordinates = new Float64Array(width);
+    for (let column = 0; column < width; column += 1) {
+      xCoordinates[column] = minX + (column + 0.5) / width * (maxX - minX);
+    }
+    const buckets = expectedBands.map(() => [] as number[]);
+    const rowsPerChunk = Math.max(1, Math.floor(RESPONSIVE_PIXEL_CHUNK / width));
+    onProgress?.(`Combining ${family} rasters on a ${width} x ${height} display grid...`);
     for (let row = 0; row < height; row += 1) {
       const y = maxY - (row + 0.5) / height * (maxY - minY);
       for (let column = 0; column < width; column += 1) {
-        const x = minX + (column + 0.5) / width * (maxX - minX);
+        const x = xCoordinates[column];
         const index = row * width + column;
-        expectedBands.forEach((band, bandIndex) => {
-          const finite = sources
-            .map((product) => sampleNativeBand(product, band.key, x, y, projection))
-            .filter(Number.isFinite);
-          combinedValues[bandIndex][index] = median(finite);
-        });
+        for (const bucket of buckets) bucket.length = 0;
+        for (const [sourceProjection, preparedSources] of preparedByProjection) {
+          const [sourceX, sourceY] = sourceProjection === projection
+            ? [x, y]
+            : proj4(projection, sourceProjection, [x, y]);
+          for (const source of preparedSources) samplePreparedSource(source, sourceX, sourceY, buckets);
+        }
+        for (let bandIndex = 0; bandIndex < buckets.length; bandIndex += 1) {
+          combinedValues[bandIndex][index] = median(buckets[bandIndex]);
+        }
       }
+      if ((row + 1) % rowsPerChunk === 0 && row + 1 < height) await yieldBrowserTask();
     }
     const footprintWgs84 = wgs84Footprint(projection, boundsNative);
     const longitudes = footprintWgs84.map(([longitude]) => longitude);
@@ -284,9 +359,17 @@ function validateSummary(summary: Record<string, unknown>, job: DisplacementJob)
   }
 }
 
-export async function parseJobResultPackage(blob: Blob, job: DisplacementJob): Promise<JobRasterDataset> {
+export async function parseJobResultPackage(
+  blob: Blob,
+  job: DisplacementJob,
+  onProgress?: JobResultProgress,
+): Promise<JobRasterDataset> {
   if (!blob.size || blob.size > MAX_PACKAGE_BYTES) throw new Error('The retained result package has an invalid size.');
-  const zip = await JSZip.loadAsync(blob, { checkCRC32: true, createFolders: false });
+  onProgress?.('Opening verified result package...');
+  // The retained package is already validated against its SHA-256 inventory.
+  // Asking JSZip to CRC every entry eagerly decompresses the entire archive a
+  // second time before any raster can be shown.
+  const zip = await JSZip.loadAsync(blob, { checkCRC32: false, createFolders: false });
   const entries = Object.values(zip.files).filter((entry) => !entry.dir);
   if (entries.some((entry) => entry.name.startsWith('/') || entry.name.split('/').includes('..'))) {
     throw new Error('The retained result package contains an unsafe path.');
@@ -303,7 +386,9 @@ export async function parseJobResultPackage(blob: Blob, job: DisplacementJob): P
   const tiffs = entries.filter((entry) => /(^|\/)product-data\/[^/]+\/[^/]+\.tiff?$/i.test(entry.name));
   if (!tiffs.length || tiffs.length > MAX_PRODUCTS) throw new Error('The retained result package has an invalid raster inventory.');
   const products: JobRasterProduct[] = [];
-  for (const entry of tiffs) {
+  for (let tiffIndex = 0; tiffIndex < tiffs.length; tiffIndex += 1) {
+    const entry = tiffs[tiffIndex];
+    onProgress?.(`Decoding scientific raster ${tiffIndex + 1} of ${tiffs.length}...`);
     const family = /(^|\/)GUNW-/i.test(entry.name) ? 'GUNW' : /(^|\/)GOFF-/i.test(entry.name) ? 'GOFF' : null;
     if (!family) throw new Error('The retained package contains an unsupported result raster.');
     const productMatch = /(^|\/)(GUNW|GOFF)-(\d+)\//i.exec(entry.name);
@@ -346,11 +431,15 @@ export async function parseJobResultPackage(blob: Blob, job: DisplacementJob): P
       boundsNative,
       boundsWgs84: [Math.min(...longitudes), Math.min(...latitudes), Math.max(...longitudes), Math.max(...latitudes)],
       footprintWgs84,
-      bands: bandDefinitions(family, rasters),
+      // Source products are intermediate aggregation inputs. Their display
+      // percentile is calculated once on the final combined product instead
+      // of sorting every source band separately.
+      bands: bandDefinitions(family, rasters, false),
     });
+    await yieldBrowserTask();
   }
   products.sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
-  const combinedProducts = combineJobProducts(products);
+  const combinedProducts = await combineJobProducts(products, onProgress);
   const diagnostics = record(summary.science_diagnostics);
   return {
     jobId: job.id,
@@ -455,12 +544,12 @@ function paintJobOverlayRows(
 }
 
 function yieldBrowserTask(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 }
 
 export async function renderJobOverlayResponsive(product: JobRasterProduct, band: JobRasterBand): Promise<string> {
   const { canvas, context, pixels } = createJobOverlayCanvas(product);
-  const rowsPerChunk = Math.max(1, Math.floor(200_000 / product.width));
+  const rowsPerChunk = Math.max(1, Math.floor(RESPONSIVE_PIXEL_CHUNK / product.width));
   for (let startRow = 0; startRow < product.height; startRow += rowsPerChunk) {
     paintJobOverlayRows(product, [{ band, pixels }], startRow, Math.min(product.height, startRow + rowsPerChunk));
     if (startRow + rowsPerChunk < product.height) await yieldBrowserTask();
@@ -472,7 +561,7 @@ export async function renderJobOverlayResponsive(product: JobRasterProduct, band
 export async function renderJobProductOverlaysResponsive(product: JobRasterProduct): Promise<Map<JobRasterBand, string>> {
   const renderTargets = product.bands.map((band) => ({ band, ...createJobOverlayCanvas(product) }));
   const paintTargets = renderTargets.map(({ band, pixels }) => ({ band, pixels }));
-  const rowsPerChunk = Math.max(1, Math.floor(200_000 / product.width));
+  const rowsPerChunk = Math.max(1, Math.floor(RESPONSIVE_PIXEL_CHUNK / product.width));
   for (let startRow = 0; startRow < product.height; startRow += rowsPerChunk) {
     paintJobOverlayRows(product, paintTargets, startRow, Math.min(product.height, startRow + rowsPerChunk));
     if (startRow + rowsPerChunk < product.height) await yieldBrowserTask();
