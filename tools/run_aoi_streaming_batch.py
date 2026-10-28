@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from drive_live_failure_queue import LiveFailureQueue
 from plan_aoi_retries import plan
 
 
@@ -103,39 +104,37 @@ def parse_args() -> argparse.Namespace:
         help="Preserve a failed checkpoint, clean temporary work and continue with remaining products.",
     )
     parser.add_argument(
-        "--publish-failure-artifacts",
+        "--publish-failure-signals",
         action="store_true",
-        help="Publish each failed checkpoint immediately for the concurrent recheck runner.",
+        help="Publish each failure immediately to the shared queue for runner 11.",
     )
     return parser.parse_args()
 
 
-def publish_failure_artifact(args: argparse.Namespace, product_id: str) -> int:
+def publish_failure_signal(args: argparse.Namespace, product: dict[str, Any]) -> int:
+    product_id = str(product["id"])
     run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
-    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "").strip()
-    if not run_id.isdigit() or not run_attempt.isdigit():
-        print(f"ERROR=LIVE_FAILURE_ARTIFACT_RUN_ID_INVALID product_id={product_id}", flush=True)
+    job_id = args.job_id.strip() or (f"github-run-{run_id}" if run_id.isdigit() else "")
+    if not job_id:
+        print(f"ERROR=LIVE_FAILURE_QUEUE_JOB_ID_INVALID product_id={product_id}", flush=True)
         return 2
-    artifact_name = f"sarguardian-live-failure-{run_id}-{run_attempt}-{product_id}"
-    checkpoint = args.checkpoint_root / "products" / f"sarguardian-granule-{product_id}"
-    result = subprocess.run([
-        "node", "tools/publish_aoi_failure_artifact.cjs",
-        "--name", artifact_name,
-        "--root", str(args.checkpoint_root),
-        "--path", str(checkpoint),
-    ], check=False)
-    if result.returncode:
+    try:
+        queue = LiveFailureQueue(job_id=job_id, version_tag=args.drive_version_tag)
+        signal = args.checkpoint_root / "live-failures" / f"{product_id}.json"
+        result = queue.publish(product, signal)
+    except Exception as exc:  # noqa: BLE001 - preserve primary stream after queue failure
         print(
-            f"ERROR=LIVE_FAILURE_ARTIFACT_UPLOAD_FAILED product_id={product_id} "
-            f"returncode={result.returncode}",
+            f"ERROR=LIVE_FAILURE_SIGNAL_UPLOAD_FAILED product_id={product_id} "
+            f"type={type(exc).__name__} detail={str(exc)[:180]}",
             flush=True,
         )
-    else:
-        print(
-            f"BATCH_FAILURE_PUBLISHED product_id={product_id} artifact={artifact_name}",
-            flush=True,
-        )
-    return result.returncode
+        return 1
+    print(
+        f"BATCH_FAILURE_PUBLISHED product_id={product_id} "
+        f"signal_file_id={result['remote']['id']}",
+        flush=True,
+    )
+    return 0
 
 
 def main() -> int:
@@ -187,7 +186,7 @@ def main() -> int:
             # A live primary workflow delegates the retry to the dedicated 11th
             # runner immediately. Local/non-live callers retain the bounded
             # same-run retry behavior.
-            if not args.publish_failure_artifacts:
+            if not args.publish_failure_signals:
                 first_plan = plan(shard_manifest, args.checkpoint_root / "products", args.checkpoint_root / "cleanups")
                 decision = next(row for row in first_plan["decisions"] if row["product_id"] == product_id)
                 if decision["status"] == "RETRY":
@@ -208,8 +207,8 @@ def main() -> int:
                 if failed is None:
                     failed = product_id
                 print(f"BATCH_PRODUCT_FAILED ordinal={ordinal} total={total} product_id={product_id}", flush=True)
-                if args.publish_failure_artifacts:
-                    publish_failure_artifact(args, product_id)
+                if args.publish_failure_signals:
+                    publish_failure_signal(args, product)
                 if args.continue_after_failure:
                     shutil.rmtree(args.work_root / product_id, ignore_errors=True)
                     print(

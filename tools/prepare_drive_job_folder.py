@@ -30,6 +30,8 @@ def main() -> int:
     drive = Drive()
     parent = required_env("GOOGLE_DRIVE_PARENT_FOLDER_ID")
     job_folder = drive.ensure_folder(parent, args.job_id)
+    live_failures = drive.ensure_folder(job_folder, "LiveFailures")
+    drive.ensure_folder(live_failures, args.version_tag)
     for product in products:
         if not isinstance(product, dict):
             raise DriveError("MANIFEST_PRODUCT_INVALID")
@@ -47,7 +49,8 @@ def main() -> int:
         for name in names:
             folder = drive.ensure_folder(folder, name)
     print(
-        f"DRIVE_JOB_FOLDER_PREPARED=PASS folder_id={job_folder} product_paths={len(products)}",
+        f"DRIVE_JOB_FOLDER_PREPARED=PASS folder_id={job_folder} product_paths={len(products)} "
+        "live_failure_queue=PASS",
         flush=True,
     )
     return 0

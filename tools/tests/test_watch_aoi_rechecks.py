@@ -11,15 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import watch_aoi_rechecks as watcher
 
 
-def test_failure_artifact_name_identifies_one_product() -> None:
-    match = watcher.FAILURE_ARTIFACT_RE.fullmatch(
-        "sarguardian-live-failure-40616142784-1-GOFF-027"
-    )
-
-    assert match is not None
-    assert match.group("product") == "GOFF-027"
-
-
 def test_safe_extract_rejects_paths_outside_destination(tmp_path: Path) -> None:
     archive = tmp_path / "unsafe.zip"
     with zipfile.ZipFile(archive, "w") as bundle:

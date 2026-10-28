@@ -285,9 +285,6 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r science-source/requirements.txt
           python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r tools/requirements-retention.txt
-          npm --prefix "$RUNNER_TEMP/sarguardian-artifact-client" install \
-            --no-audit --no-fund --save-exact @actions/artifact@2.3.2
-          echo "NODE_PATH=$RUNNER_TEMP/sarguardian-artifact-client/node_modules" >> "$GITHUB_ENV"
 
       - name: Download the exact AOI run manifest
         uses: actions/download-artifact@v4
@@ -310,7 +307,7 @@ jobs:
             --shard-index "${{ matrix.shard_index }}" \
             --shard-count "${{ matrix.shard_count }}" \
             --continue-after-failure \
-            --publish-failure-artifacts
+            --publish-failure-signals
 
       - name: Preserve all product and cleanup checkpoints together
         if: always()

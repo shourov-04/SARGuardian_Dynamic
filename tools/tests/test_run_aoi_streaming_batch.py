@@ -148,11 +148,11 @@ def test_live_primary_publishes_failure_and_moves_to_next_product_without_local_
     monkeypatch.setattr(batch.subprocess, "run", run)
     monkeypatch.setattr(batch, "plan", final_plan)
     monkeypatch.setattr(
-        batch, "publish_failure_artifact",
-        lambda _args, product_id: published.append(product_id) or 0,
+        batch, "publish_failure_signal",
+        lambda _args, product: published.append(product["id"]) or 0,
     )
     monkeypatch.setattr(batch.sys, "argv", argv(tmp_path, manifest_path) + [
-        "--continue-after-failure", "--publish-failure-artifacts",
+        "--continue-after-failure", "--publish-failure-signals",
     ])
 
     assert batch.main() == 1

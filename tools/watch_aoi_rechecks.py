@@ -18,13 +18,9 @@ from typing import Any
 
 import requests
 
+from drive_live_failure_queue import LiveFailureQueue
 from plan_aoi_retries import plan
 from run_aoi_streaming_batch import load_products
-
-
-FAILURE_ARTIFACT_RE = re.compile(
-    r"sarguardian-live-failure-(?P<run>[0-9]+)-(?P<attempt>[0-9]+)-(?P<product>(?:GUNW|GOFF)-[0-9]{3,5})"
-)
 
 
 def safe_extract(archive: Path, destination: Path) -> None:
@@ -205,43 +201,32 @@ def main() -> int:
     by_id = {str(product["id"]): product for product in products}
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     github = GitHubRun(args.repository, args.run_id, token, args.api_url)
+    queue_job_id = args.job_id.strip() or f"github-run-{args.run_id}"
+    queue = LiveFailureQueue(job_id=queue_job_id, version_tag=args.drive_version_tag)
     for root in (
         args.work_root, args.incoming_root, args.primary_root,
         args.recheck_root, args.consolidated_root,
     ):
         root.mkdir(parents=True, exist_ok=True)
 
-    prefix = f"sarguardian-live-failure-{args.run_id}-{args.run_attempt}-"
-    seen: set[int] = set()
+    seen: set[str] = set()
     attempted: set[str] = set()
     deadline = time.monotonic() + args.timeout_seconds
     completed_polls = 0
 
     while time.monotonic() < deadline:
-        discovered = github.artifacts()
+        discovered = queue.signals()
         new_failures = [
             row for row in discovered
-            if str(row.get("name", "")).startswith(prefix)
-            and isinstance(row.get("id"), int)
-            and row["id"] not in seen
-            and not row.get("expired")
+            if isinstance(row.get("id"), str) and row["id"] not in seen
         ]
-        for artifact in sorted(new_failures, key=lambda row: int(row["id"])):
-            match = FAILURE_ARTIFACT_RE.fullmatch(str(artifact["name"]))
-            if not match or match.group("run") != args.run_id or match.group("attempt") != args.run_attempt:
-                continue
-            product_id = match.group("product")
+        for signal in new_failures:
+            product_id = str(signal["product_id"])
             if product_id not in by_id:
-                raise ValueError(f"Failure artifact names unknown product {product_id}.")
-            artifact_id = int(artifact["id"])
-            archive = args.incoming_root / f"failure-{artifact_id}.zip"
-            extracted = args.incoming_root / f"failure-{artifact_id}"
-            github.download(artifact, archive)
-            safe_extract(archive, extracted)
-            prior = extracted / "products" / f"sarguardian-granule-{product_id}"
-            seen.add(artifact_id)
+                raise ValueError(f"Failure signal names unknown product {product_id}.")
+            seen.add(str(signal["id"]))
             attempted.add(product_id)
-            recheck_product(args, by_id[product_id], prior)
+            recheck_product(args, by_id[product_id], args.incoming_root / "no-prior-checkpoint")
 
         if github.primary_jobs_complete():
             completed_polls = completed_polls + 1 if not new_failures else 0
@@ -293,7 +278,7 @@ def main() -> int:
         "status": "PASS" if final["products_complete"] == len(products) else "FAIL",
         "products_expected": len(products),
         "products_complete": final["products_complete"],
-        "live_failure_artifacts_consumed": len(seen),
+        "live_failure_signals_consumed": len(seen),
         "rechecked_product_ids": sorted(attempted),
         "terminal_failure_count": final["terminal_failure_count"],
         "decisions": final["decisions"],

@@ -107,8 +107,8 @@ def test_account_workflow_calls_the_upstream_dynamic_aoi_streaming_pipeline() ->
     assert "name: Recheck failed granules immediately on runner 11" in dashboard
     assert "needs: manifest" in dashboard
     assert "tools/watch_aoi_rechecks.py" in dashboard
-    assert "--publish-failure-artifacts" in dashboard
-    assert "@actions/artifact@2.3.2" in dashboard
+    assert "--publish-failure-signals" in dashboard
+    assert "@actions/artifact" not in dashboard
     assert dashboard.count("--continue-after-failure") == 1
     assert "name: sarguardian-consolidated-products" in dashboard
     assert "needs: [manifest, process-products, recheck-products]" in dashboard
