@@ -103,12 +103,15 @@ def test_account_workflow_calls_the_upstream_dynamic_aoi_streaming_pipeline() ->
     assert "python -u tools/run_aoi_streaming_batch.py" in dashboard
     assert "uses: ./.github/workflows/sarguardian-aoi-product-worker.yml" not in dashboard
     assert "max-parallel: 10" in dashboard
-    assert "recover-products:" in dashboard
-    assert "name: Recover retryable products after all primary runners" in dashboard
-    assert "--retry-manifest-out" in dashboard
-    assert "--continue-after-failure" in dashboard
+    assert "recheck-products:" in dashboard
+    assert "name: Recheck failed granules immediately on runner 11" in dashboard
+    assert "needs: manifest" in dashboard
+    assert "tools/watch_aoi_rechecks.py" in dashboard
+    assert "--publish-failure-artifacts" in dashboard
+    assert "@actions/artifact@2.3.2" in dashboard
+    assert dashboard.count("--continue-after-failure") == 1
     assert "name: sarguardian-consolidated-products" in dashboard
-    assert "needs: [manifest, process-products, recover-products]" in dashboard
+    assert "needs: [manifest, process-products, recheck-products]" in dashboard
     assert "--shard-index" in dashboard
     assert "--shard-count" in dashboard
     assert "pattern: sarguardian-stream-products-*" in dashboard

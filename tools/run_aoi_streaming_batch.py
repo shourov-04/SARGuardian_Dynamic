@@ -102,7 +102,40 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Preserve a failed checkpoint, clean temporary work and continue with remaining products.",
     )
+    parser.add_argument(
+        "--publish-failure-artifacts",
+        action="store_true",
+        help="Publish each failed checkpoint immediately for the concurrent recheck runner.",
+    )
     return parser.parse_args()
+
+
+def publish_failure_artifact(args: argparse.Namespace, product_id: str) -> int:
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "").strip()
+    if not run_id.isdigit() or not run_attempt.isdigit():
+        print(f"ERROR=LIVE_FAILURE_ARTIFACT_RUN_ID_INVALID product_id={product_id}", flush=True)
+        return 2
+    artifact_name = f"sarguardian-live-failure-{run_id}-{run_attempt}-{product_id}"
+    checkpoint = args.checkpoint_root / "products" / f"sarguardian-granule-{product_id}"
+    result = subprocess.run([
+        "node", "tools/publish_aoi_failure_artifact.cjs",
+        "--name", artifact_name,
+        "--root", str(args.checkpoint_root),
+        "--path", str(checkpoint),
+    ], check=False)
+    if result.returncode:
+        print(
+            f"ERROR=LIVE_FAILURE_ARTIFACT_UPLOAD_FAILED product_id={product_id} "
+            f"returncode={result.returncode}",
+            flush=True,
+        )
+    else:
+        print(
+            f"BATCH_FAILURE_PUBLISHED product_id={product_id} artifact={artifact_name}",
+            flush=True,
+        )
+    return result.returncode
 
 
 def main() -> int:
@@ -151,26 +184,32 @@ def main() -> int:
         result = subprocess.run(command, env=environment, check=False)
         print("::endgroup::", flush=True)
         if result.returncode:
-            first_plan = plan(shard_manifest, args.checkpoint_root / "products", args.checkpoint_root / "cleanups")
-            decision = next(row for row in first_plan["decisions"] if row["product_id"] == product_id)
-            if decision["status"] == "RETRY":
-                prior = args.checkpoint_root / "prior" / f"sarguardian-granule-{product_id}"
-                current = args.checkpoint_root / "products" / f"sarguardian-granule-{product_id}"
-                if prior.exists():
-                    shutil.rmtree(prior)
-                if current.exists():
-                    shutil.copytree(current, prior)
-                retry_command = command[:-2] + ["--execution-label", "retry-1", "--prior-checkpoint", str(prior)]
-                print(
-                    f"BATCH_PRODUCT_RETRY product_id={product_id} attempt=2/2 "
-                    f"reasons={','.join(decision['reasons'])}",
-                    flush=True,
-                )
-                result = subprocess.run(retry_command, env=environment, check=False)
+            # A live primary workflow delegates the retry to the dedicated 11th
+            # runner immediately. Local/non-live callers retain the bounded
+            # same-run retry behavior.
+            if not args.publish_failure_artifacts:
+                first_plan = plan(shard_manifest, args.checkpoint_root / "products", args.checkpoint_root / "cleanups")
+                decision = next(row for row in first_plan["decisions"] if row["product_id"] == product_id)
+                if decision["status"] == "RETRY":
+                    prior = args.checkpoint_root / "prior" / f"sarguardian-granule-{product_id}"
+                    current = args.checkpoint_root / "products" / f"sarguardian-granule-{product_id}"
+                    if prior.exists():
+                        shutil.rmtree(prior)
+                    if current.exists():
+                        shutil.copytree(current, prior)
+                    retry_command = command[:-2] + ["--execution-label", "retry-1", "--prior-checkpoint", str(prior)]
+                    print(
+                        f"BATCH_PRODUCT_RETRY product_id={product_id} attempt=2/2 "
+                        f"reasons={','.join(decision['reasons'])}",
+                        flush=True,
+                    )
+                    result = subprocess.run(retry_command, env=environment, check=False)
             if result.returncode:
                 if failed is None:
                     failed = product_id
                 print(f"BATCH_PRODUCT_FAILED ordinal={ordinal} total={total} product_id={product_id}", flush=True)
+                if args.publish_failure_artifacts:
+                    publish_failure_artifact(args, product_id)
                 if args.continue_after_failure:
                     shutil.rmtree(args.work_root / product_id, ignore_errors=True)
                     print(

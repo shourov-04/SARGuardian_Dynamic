@@ -41,7 +41,7 @@ def _inputs(tmp_path: Path, step_outcomes: dict[str, str], validation_status: st
     return manifest, product_root, cleanup_root
 
 
-def test_reader_failure_after_successful_download_and_aoi_preflight_is_terminal_not_retried(tmp_path):
+def test_primary_reader_failure_is_scheduled_for_isolated_recheck(tmp_path):
     manifest, product_root, cleanup_root = _inputs(
         tmp_path,
         {"download": "success", "aoi_preflight": "success", "reader": "failure"},
@@ -49,13 +49,11 @@ def test_reader_failure_after_successful_download_and_aoi_preflight_is_terminal_
 
     result = planner.plan(manifest, product_root, cleanup_root)
 
-    assert result["retry_count"] == 0
-    assert result["terminal_failure_count"] == 1
+    assert result["retry_count"] == 1
+    assert result["terminal_failure_count"] == 0
     decision = result["decisions"][0]
-    assert decision["status"] == "TERMINAL_FAILURE"
-    assert decision["terminal_reason"] == (
-        "NON_RETRYABLE_READER_FAILURE_AFTER_SUCCESSFUL_DOWNLOAD_AND_AOI_PREFLIGHT"
-    )
+    assert decision["status"] == "RETRY"
+    assert decision["terminal_reason"] is None
 
 
 def test_download_failure_remains_eligible_for_retry(tmp_path):
@@ -71,7 +69,7 @@ def test_download_failure_remains_eligible_for_retry(tmp_path):
     assert result["decisions"][0]["status"] == "RETRY"
 
 
-def test_non_retryable_download_failure_is_terminal(tmp_path):
+def test_primary_non_retryable_download_failure_still_gets_one_isolated_recheck(tmp_path):
     manifest, product_root, cleanup_root = _inputs(
         tmp_path,
         {"download": "failure", "aoi_preflight": "skipped", "reader": "skipped"},
@@ -80,12 +78,12 @@ def test_non_retryable_download_failure_is_terminal(tmp_path):
 
     result = planner.plan(manifest, product_root, cleanup_root)
 
-    assert result["retry_count"] == 0
-    assert result["terminal_failure_count"] == 1
-    assert result["decisions"][0]["terminal_reason"] == "NON_RETRYABLE_DOWNLOAD_FAILURE"
+    assert result["retry_count"] == 1
+    assert result["terminal_failure_count"] == 0
+    assert result["decisions"][0]["status"] == "RETRY"
 
 
-def test_structural_validation_failure_after_successful_reader_is_terminal(tmp_path):
+def test_primary_structural_validation_failure_gets_one_isolated_recheck(tmp_path):
     manifest, product_root, cleanup_root = _inputs(
         tmp_path,
         {"download": "success", "aoi_preflight": "success", "reader": "success"},
@@ -94,15 +92,30 @@ def test_structural_validation_failure_after_successful_reader_is_terminal(tmp_p
 
     result = planner.plan(manifest, product_root, cleanup_root)
 
+    assert result["retry_count"] == 1
+    assert result["terminal_failure_count"] == 0
+    assert result["decisions"][0]["status"] == "RETRY"
+
+
+def test_recovery_reader_failure_is_terminal_after_the_isolated_recheck(tmp_path):
+    manifest, product_root, cleanup_root = _inputs(
+        tmp_path,
+        {"download": "success", "aoi_preflight": "success", "reader": "failure"},
+    )
+    manifest["recovery_source_run_id"] = manifest["run_id"]
+
+    result = planner.plan(manifest, product_root, cleanup_root)
+
     assert result["retry_count"] == 0
     assert result["terminal_failure_count"] == 1
-    assert result["decisions"][0]["status"] == "TERMINAL_FAILURE"
-    assert result["decisions"][0]["terminal_reason"] == (
-        "NON_RETRYABLE_STRUCTURAL_VALIDATION_FAILURE_AFTER_SUCCESSFUL_READER"
+    decision = result["decisions"][0]
+    assert decision["status"] == "TERMINAL_FAILURE"
+    assert decision["terminal_reason"] == (
+        "NON_RETRYABLE_READER_FAILURE_AFTER_SUCCESSFUL_DOWNLOAD_AND_AOI_PREFLIGHT"
     )
 
 
-def test_retry_manifest_contains_only_retryable_products(tmp_path):
+def test_retry_manifest_contains_every_failed_primary_product(tmp_path):
     manifest, product_root, cleanup_root = _inputs(
         tmp_path,
         {"download": "failure", "aoi_preflight": "skipped", "reader": "skipped"},
@@ -124,6 +137,6 @@ def test_retry_manifest_contains_only_retryable_products(tmp_path):
     result = planner.plan(manifest, product_root, cleanup_root)
     recovery = planner.build_retry_manifest(manifest, result)
 
-    assert [product["id"] for product in recovery["products"]] == ["GOFF-001"]
-    assert recovery["recovery_product_count"] == 1
+    assert [product["id"] for product in recovery["products"]] == ["GOFF-001", "GUNW-002"]
+    assert recovery["recovery_product_count"] == 2
     assert recovery["recovery_source_run_id"] == "test-run"

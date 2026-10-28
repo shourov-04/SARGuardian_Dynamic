@@ -244,6 +244,7 @@ jobs:
       GOOGLE_DRIVE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_JSON }}
       GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
       GOOGLE_DRIVE_PARENT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PARENT_FOLDER_ID || secrets.GOOGLE_DRIVE_FOLDER_ID }}
+      NODE_PATH: ${{ runner.temp }}/sarguardian-artifact-client/node_modules
     steps:
       - name: Checkout orchestration code at the manifest revision
         uses: actions/checkout@v4
@@ -285,6 +286,8 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r science-source/requirements.txt
           python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r tools/requirements-retention.txt
+          npm --prefix "$RUNNER_TEMP/sarguardian-artifact-client" install \
+            --no-audit --no-fund --save-exact @actions/artifact@2.3.2
 
       - name: Download the exact AOI run manifest
         uses: actions/download-artifact@v4
@@ -305,7 +308,9 @@ jobs:
             --job-id "$DRIVE_JOB_ID" --drive-version-tag "$DRIVE_VERSION_TAG" \
             --orchestration-sha "$AOI_ORCHESTRATION_SHA" \
             --shard-index "${{ matrix.shard_index }}" \
-            --shard-count "${{ matrix.shard_count }}"
+            --shard-count "${{ matrix.shard_count }}" \
+            --continue-after-failure \
+            --publish-failure-artifacts
 
       - name: Preserve all product and cleanup checkpoints together
         if: always()
@@ -316,10 +321,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  recover-products:
-    name: Recover retryable products after all primary runners
-    needs: [manifest, process-products]
-    if: always() && needs.manifest.result == 'success'
+  recheck-products:
+    name: Recheck failed granules immediately on runner 11
+    needs: manifest
+    if: needs.manifest.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 345
     env:
@@ -336,21 +341,22 @@ jobs:
       GOOGLE_DRIVE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_JSON }}
       GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
       GOOGLE_DRIVE_PARENT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PARENT_FOLDER_ID || secrets.GOOGLE_DRIVE_FOLDER_ID }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout recovery orchestration at the manifest revision
+      - name: Checkout live-recheck orchestration at the manifest revision
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.manifest.outputs.orchestration_sha }}
 
-      - name: Verify recovery orchestration revision
+      - name: Verify live-recheck orchestration revision
         shell: bash
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
           test "$actual" = "$AOI_ORCHESTRATION_SHA"
-          echo "AOI_RECOVERY_ORCHESTRATION_REVISION_VERIFIED=$actual"
+          echo "AOI_LIVE_RECHECK_ORCHESTRATION_REVISION_VERIFIED=$actual"
 
-      - name: Set up Python once for recovery
+      - name: Set up Python once for the live recheck runner
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -360,93 +366,73 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sarguardian-aoi-run-manifest
-          path: ${{ runner.temp }}/sarguardian-aoi/recovery/manifest
+          path: ${{ runner.temp }}/sarguardian-aoi/live-recheck/manifest
 
-      - name: Collect every primary runner checkpoint
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: sarguardian-stream-products-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/sarguardian-aoi/recovery/checkpoints
-
-      - name: Plan only retryable or missing products
-        id: recovery_plan
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/sarguardian-aoi/recovery"
-          mkdir -p "$root/checkpoints/products" "$root/checkpoints/cleanups" "$root/plan"
-          python -u tools/plan_aoi_retries.py \
-            --manifest "$root/manifest/manifest.json" \
-            --product-root "$root/checkpoints/products" \
-            --cleanup-root "$root/checkpoints/cleanups" \
-            --out "$root/plan/retry-plan.json" \
-            --retry-manifest-out "$root/plan/retry-manifest.json"
-
-      - name: Checkout the pinned scientific engine once for recovery
-        if: steps.recovery_plan.outputs.retry_count != '0'
+      - name: Checkout the pinned scientific engine once for live rechecks
         uses: actions/checkout@v4
         with:
           repository: moshiour0/SARGuardian
           ref: 10639a916c9829850775410b3ed7de62e527770d
           path: science-source
 
-      - name: Verify pinned recovery science revision
-        if: steps.recovery_plan.outputs.retry_count != '0'
+      - name: Verify pinned live-recheck science revision
         shell: bash
         run: |
           set -euo pipefail
           actual="$(git -C science-source rev-parse HEAD)"
           test "$actual" = "$SCIENCE_COMMIT"
-          echo "RECOVERY_SCIENCE_REVISION_VERIFIED=$actual"
+          echo "LIVE_RECHECK_SCIENCE_REVISION_VERIFIED=$actual"
 
-      - name: Install recovery dependencies once
-        if: steps.recovery_plan.outputs.retry_count != '0'
+      - name: Install live-recheck dependencies once
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r science-source/requirements.txt
           python -m pip install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 45 -r tools/requirements-retention.txt
 
-      - name: Recover failed granules sequentially
-        id: recover
-        if: steps.recovery_plan.outputs.retry_count != '0'
+      - name: Watch primary runners and recheck each failed granule immediately
+        id: recheck
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/sarguardian-aoi/recovery"
-          python -u tools/run_aoi_streaming_batch.py \
-            --manifest "$root/plan/retry-manifest.json" \
+          root="$RUNNER_TEMP/sarguardian-aoi/live-recheck"
+          python -u tools/watch_aoi_rechecks.py \
+            --manifest "$root/manifest/manifest.json" \
             --science-root "$PWD/science-source" \
-            --work-root "$root/work" --checkpoint-root "$root/checkpoints" \
+            --work-root "$root/work" \
+            --incoming-root "$root/incoming" \
+            --primary-root "$root/primary-checkpoints" \
+            --recheck-root "$root/recheck-checkpoints" \
+            --consolidated-root "$root/consolidated-checkpoints" \
             --retention-profile "$RETENTION_PROFILE" \
             --job-id "$DRIVE_JOB_ID" --drive-version-tag "$DRIVE_VERSION_TAG" \
             --orchestration-sha "$AOI_ORCHESTRATION_SHA" \
-            --continue-after-failure
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --api-url "$GITHUB_API_URL"
 
-      - name: Publish consolidated primary and recovery checkpoints
+      - name: Publish consolidated primary and live-recheck checkpoints
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sarguardian-consolidated-products
-          path: ${{ runner.temp }}/sarguardian-aoi/recovery/checkpoints
+          path: ${{ runner.temp }}/sarguardian-aoi/live-recheck/consolidated-checkpoints
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Enforce successful recovery
-        if: always() && steps.recovery_plan.outputs.retry_count != '0'
+      - name: Enforce successful live rechecks
+        if: always()
         shell: bash
         env:
-          RECOVERY_OUTCOME: ${{ steps.recover.outcome }}
+          RECHECK_OUTCOME: ${{ steps.recheck.outcome }}
         run: |
           set -euo pipefail
-          test "$RECOVERY_OUTCOME" = "success"
+          test "$RECHECK_OUTCOME" = "success"
 
   dashboard:
     name: Assemble results dashboard and downloadable maps
-    needs: [manifest, process-products, recover-products]
+    needs: [manifest, process-products, recheck-products]
     if: always() && needs.manifest.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 90

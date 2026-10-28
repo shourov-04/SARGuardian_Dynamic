@@ -18,6 +18,7 @@ def read_json(path: Path) -> dict[str, Any] | None:
 
 def plan(manifest: dict[str, Any], product_root: Path, cleanup_root: Path) -> dict[str, Any]:
     retry=[]; decisions=[]
+    is_recovery=bool(manifest.get("recovery_source_run_id"))
     for product in manifest.get("products",[]):
         pid=str(product.get("id",""))
         family=str(product.get("product_type",""))
@@ -40,20 +41,23 @@ def plan(manifest: dict[str, Any], product_root: Path, cleanup_root: Path) -> di
             and isinstance(download_diagnostics, list)
             and "DOWNLOAD_FAILURE_RETRYABLE=no" in download_diagnostics
         )
-        # Repeating a deterministic local failure with the same source bytes and
-        # the same code revision cannot repair it. Retry only acquisition/retention
-        # failures or missing checkpoints without a known terminal processing cause.
-        if permanent_download_failure:
-            terminal_reason="NON_RETRYABLE_DOWNLOAD_FAILURE"
-        elif (outcomes.get("download") == "success"
-                and outcomes.get("aoi_preflight") == "success"
-                and outcomes.get("reader") == "failure"):
-            terminal_reason="NON_RETRYABLE_READER_FAILURE_AFTER_SUCCESSFUL_DOWNLOAD_AND_AOI_PREFLIGHT"
-        elif (outcomes.get("download") == "success"
-                and outcomes.get("aoi_preflight") == "failure"):
-            terminal_reason="NON_RETRYABLE_AOI_PREFLIGHT_FAILURE_AFTER_SUCCESSFUL_DOWNLOAD"
-        elif (outcomes.get("reader") == "success" and validation and validation.get("status") == "FAIL"):
-            terminal_reason="NON_RETRYABLE_STRUCTURAL_VALIDATION_FAILURE_AFTER_SUCCESSFUL_READER"
+        # Every incomplete product from the primary runners gets one isolated
+        # recovery execution. Only classify a deterministic failure as terminal
+        # after it has failed in that recovery pass as well. This keeps products
+        # later in the same primary shard out of recovery while still rechecking
+        # the product that actually failed.
+        if is_recovery:
+            if permanent_download_failure:
+                terminal_reason="NON_RETRYABLE_DOWNLOAD_FAILURE"
+            elif (outcomes.get("download") == "success"
+                    and outcomes.get("aoi_preflight") == "success"
+                    and outcomes.get("reader") == "failure"):
+                terminal_reason="NON_RETRYABLE_READER_FAILURE_AFTER_SUCCESSFUL_DOWNLOAD_AND_AOI_PREFLIGHT"
+            elif (outcomes.get("download") == "success"
+                    and outcomes.get("aoi_preflight") == "failure"):
+                terminal_reason="NON_RETRYABLE_AOI_PREFLIGHT_FAILURE_AFTER_SUCCESSFUL_DOWNLOAD"
+            elif (outcomes.get("reader") == "success" and validation and validation.get("status") == "FAIL"):
+                terminal_reason="NON_RETRYABLE_STRUCTURAL_VALIDATION_FAILURE_AFTER_SUCCESSFUL_READER"
         want_aoi=manifest.get("aoi_name")
         want_sha=manifest.get("science_commit")
         want_profile=manifest.get("retention_profile")
